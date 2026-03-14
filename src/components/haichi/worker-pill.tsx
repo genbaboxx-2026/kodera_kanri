@@ -1,0 +1,40 @@
+'use client'
+
+import { X, Moon, Crown } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+interface WorkerPillProps {
+  name: string
+  shift: '日勤' | '夜勤'
+  isForeman?: boolean
+  onRemove?: () => void
+  onClick?: () => void
+}
+
+export function WorkerPill({ name, shift, isForeman, onRemove, onClick }: WorkerPillProps) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full px-3 py-1 text-sm',
+        isForeman ? 'bg-amber-100 text-amber-800' : 'bg-gray-100',
+        onClick && 'cursor-pointer hover:bg-gray-200'
+      )}
+      onClick={onClick}
+    >
+      {isForeman && <Crown className="h-3 w-3 text-amber-600" />}
+      {shift === '夜勤' && <Moon className="h-3 w-3 text-blue-600" />}
+      <span>{name}</span>
+      {onRemove && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onRemove()
+          }}
+          className="ml-1 rounded-full p-0.5 hover:bg-gray-200"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+    </span>
+  )
+}
