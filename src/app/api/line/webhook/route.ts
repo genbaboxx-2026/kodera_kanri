@@ -112,7 +112,7 @@ async function handleFollow(event: {
   await replyMessage(event.replyToken, [
     {
       type: 'text',
-      text: '小寺工務店 業務管理システムへようこそ！\n\n配置連絡を受け取るには、アカウント連携が必要です。\n\nあなたの「作業員番号」を入力してください。\n（作業員番号は管理者にご確認ください）',
+      text: '小寺工務店 業務管理システムへようこそ！\n\n配置連絡を受け取るには、アカウント連携が必要です。\n\nシステムに登録されている「メールアドレス」を入力してください。',
     },
   ])
 }
@@ -166,7 +166,7 @@ async function handleMessage(event: {
   replyToken: string
   message: { type: string; text?: string }
 }) {
-  // メッセージ受信時の処理（作業員番号入力によるLINE連携）
+  // メッセージ受信時の処理（メールアドレス入力によるLINE連携）
   if (event.message.type !== 'text' || !event.message.text) {
     return
   }
@@ -175,42 +175,66 @@ async function handleMessage(event: {
   const text = event.message.text.trim()
   console.log(`Message from ${lineUserId}: ${text}`)
 
-  // 数字のみの入力を作業員番号として扱う
-  if (!/^\d+$/.test(text)) {
+  // 「リセット」コマンドの処理
+  if (text === 'リセット' || text === 'reset' || text === 'RESET') {
+    // 現在のline_user_idで紐付いている作業員を検索
+    const { data: currentWorker } = await supabaseAdmin
+      .from('workers')
+      .select('id, name')
+      .eq('line_user_id', lineUserId)
+      .single()
+
+    if (!currentWorker) {
+      await replyMessage(event.replyToken, [
+        {
+          type: 'text',
+          text: '現在、連携されているアカウントはありません。\n\nメールアドレスを入力して連携してください。',
+        },
+      ])
+      return
+    }
+
+    // 連携を解除
+    await supabaseAdmin
+      .from('workers')
+      .update({ line_user_id: null })
+      .eq('id', currentWorker.id)
+
     await replyMessage(event.replyToken, [
       {
         type: 'text',
-        text: '作業員番号を数字で入力してください。\n\n例: 1',
+        text: `${currentWorker.name}さんの連携を解除しました。\n\n再度連携する場合は、メールアドレスを入力してください。`,
       },
     ])
     return
   }
 
-  const workerId = parseInt(text)
+  // メールアドレスの簡易バリデーション
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  if (!emailRegex.test(text)) {
+    await replyMessage(event.replyToken, [
+      {
+        type: 'text',
+        text: 'メールアドレスを入力してください。\n\n連携を解除する場合は「リセット」と送信してください。',
+      },
+    ])
+    return
+  }
 
-  // 作業員を検索
+  const email = text.toLowerCase()
+
+  // メールアドレスで作業員を検索
   const { data: worker, error: workerError } = await supabaseAdmin
     .from('workers')
     .select('id, name, line_user_id')
-    .eq('id', workerId)
+    .eq('email', email)
     .single()
 
   if (workerError || !worker) {
     await replyMessage(event.replyToken, [
       {
         type: 'text',
-        text: `作業員番号 ${workerId} が見つかりませんでした。\n\n正しい番号を入力してください。`,
-      },
-    ])
-    return
-  }
-
-  // 既に他のLINEアカウントと連携済みの場合
-  if (worker.line_user_id && worker.line_user_id !== lineUserId) {
-    await replyMessage(event.replyToken, [
-      {
-        type: 'text',
-        text: 'この作業員番号は既に別のLINEアカウントと連携されています。\n\n管理者にお問い合わせください。',
+        text: '登録されていないメールアドレスです。\n\n管理者に確認してください。',
       },
     ])
     return
@@ -221,17 +245,37 @@ async function handleMessage(event: {
     await replyMessage(event.replyToken, [
       {
         type: 'text',
-        text: `${worker.name}さん、既にアカウント連携済みです。\n\n配置連絡をお待ちください。`,
+        text: `${worker.name}さん、すでに連携済みです。\n\n再連携する場合は「リセット」と送信してください。`,
       },
     ])
     return
+  }
+
+  // 既に別のLINEアカウントと連携済みの場合 → 古い紐付けを解除して新しく紐付け
+  if (worker.line_user_id && worker.line_user_id !== lineUserId) {
+    console.log(`Replacing LINE link for worker ${worker.id}: ${worker.line_user_id} -> ${lineUserId}`)
+  }
+
+  // このLINEユーザーIDが別の作業員に紐付いている場合 → 古い紐付けを解除
+  const { data: existingWorker } = await supabaseAdmin
+    .from('workers')
+    .select('id, name')
+    .eq('line_user_id', lineUserId)
+    .single()
+
+  if (existingWorker && existingWorker.id !== worker.id) {
+    await supabaseAdmin
+      .from('workers')
+      .update({ line_user_id: null })
+      .eq('id', existingWorker.id)
+    console.log(`Cleared LINE link from worker ${existingWorker.id} (${existingWorker.name})`)
   }
 
   // LINE連携を実行
   const { error: updateError } = await supabaseAdmin
     .from('workers')
     .update({ line_user_id: lineUserId })
-    .eq('id', workerId)
+    .eq('id', worker.id)
 
   if (updateError) {
     console.error('Failed to link LINE account:', updateError)

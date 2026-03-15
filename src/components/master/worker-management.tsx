@@ -473,7 +473,9 @@ export function WorkerManagement() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-gray-50">
+                    <th className="text-left py-3 px-2 font-medium w-12">ID</th>
                     <th className="text-left py-3 px-4 font-medium">氏名</th>
+                    <th className="text-center py-3 px-2 font-medium">LINE</th>
                     <th className="text-left py-3 px-4 font-medium">権限</th>
                     <th className="text-center py-3 px-4 font-medium">
                       <div className="flex items-center justify-center gap-1">
@@ -534,7 +536,19 @@ export function WorkerManagement() {
 
                     return (
                       <tr key={worker.id} className="border-b hover:bg-gray-50">
+                        <td className="py-3 px-2 text-gray-500 text-xs">{worker.id}</td>
                         <td className="py-3 px-4 font-medium">{worker.name}</td>
+                        <td className="py-3 px-2 text-center">
+                          {worker.line_user_id ? (
+                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100" title="LINE連携済み">
+                              <Check className="h-3 w-3 text-green-600" />
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-100" title="LINE未連携">
+                              <X className="h-3 w-3 text-gray-400" />
+                            </span>
+                          )}
+                        </td>
                         <td className="py-3 px-4">
                           {worker.system_role ? (
                             <Badge variant={worker.system_role === '管理者' ? 'default' : 'secondary'}>
