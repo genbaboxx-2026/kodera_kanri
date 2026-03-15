@@ -18,6 +18,7 @@ export type Database = {
           name: string
           name_kana: string
           email: string | null
+          phone: string | null
           system_role: '管理者' | '現場スタッフ' | null
           can_edit_haichi: boolean
           can_edit_nippo: boolean
@@ -34,6 +35,7 @@ export type Database = {
           name: string
           name_kana: string
           email?: string | null
+          phone?: string | null
           system_role?: '管理者' | '現場スタッフ' | null
           can_edit_haichi?: boolean
           can_edit_nippo?: boolean
@@ -50,6 +52,7 @@ export type Database = {
           name?: string
           name_kana?: string
           email?: string | null
+          phone?: string | null
           system_role?: '管理者' | '現場スタッフ' | null
           can_edit_haichi?: boolean
           can_edit_nippo?: boolean

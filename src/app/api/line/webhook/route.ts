@@ -112,7 +112,7 @@ async function handleFollow(event: {
   await replyMessage(event.replyToken, [
     {
       type: 'text',
-      text: '小寺工務店 業務管理システムへようこそ！\n\n配置連絡を受け取るには、アカウント連携が必要です。\n\nシステムに登録されている「メールアドレス」を入力してください。',
+      text: '小寺工務店 業務管理システムへようこそ！\n\n配置連絡を受け取るには、アカウント連携が必要です。\n\nシステムに登録されている「電話番号」を入力してください（ハイフンなし）。\n\n例: 09012345678',
     },
   ])
 }
@@ -166,7 +166,7 @@ async function handleMessage(event: {
   replyToken: string
   message: { type: string; text?: string }
 }) {
-  // メッセージ受信時の処理（メールアドレス入力によるLINE連携）
+  // メッセージ受信時の処理（電話番号入力によるLINE連携）
   if (event.message.type !== 'text' || !event.message.text) {
     return
   }
@@ -188,7 +188,7 @@ async function handleMessage(event: {
       await replyMessage(event.replyToken, [
         {
           type: 'text',
-          text: '現在、連携されているアカウントはありません。\n\nメールアドレスを入力して連携してください。',
+          text: '現在、連携されているアカウントはありません。\n\n電話番号を入力して連携してください。',
         },
       ])
       return
@@ -203,38 +203,38 @@ async function handleMessage(event: {
     await replyMessage(event.replyToken, [
       {
         type: 'text',
-        text: `${currentWorker.name}さんの連携を解除しました。\n\n再度連携する場合は、メールアドレスを入力してください。`,
+        text: `${currentWorker.name}さんの連携を解除しました。\n\n再度連携する場合は、電話番号を入力してください。`,
       },
     ])
     return
   }
 
-  // メールアドレスの簡易バリデーション
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-  if (!emailRegex.test(text)) {
+  // 電話番号を正規化（ハイフン・スペース・その他記号を除去）
+  const normalizedPhone = text.replace(/[\s\-ー−\(\)（）]/g, '')
+
+  // 電話番号のバリデーション（数字のみ、10〜11桁）
+  if (!/^\d{10,11}$/.test(normalizedPhone)) {
     await replyMessage(event.replyToken, [
       {
         type: 'text',
-        text: 'メールアドレスを入力してください。\n\n連携を解除する場合は「リセット」と送信してください。',
+        text: '電話番号を入力してください（ハイフンなし）。\n\n例: 09012345678\n\n連携を解除する場合は「リセット」と送信してください。',
       },
     ])
     return
   }
 
-  const email = text.toLowerCase()
-
-  // メールアドレスで作業員を検索
+  // 電話番号で作業員を検索
   const { data: worker, error: workerError } = await supabaseAdmin
     .from('workers')
     .select('id, name, line_user_id')
-    .eq('email', email)
+    .eq('phone', normalizedPhone)
     .single()
 
   if (workerError || !worker) {
     await replyMessage(event.replyToken, [
       {
         type: 'text',
-        text: '登録されていないメールアドレスです。\n\n管理者に確認してください。',
+        text: '登録されていない電話番号です。\n\n管理者に確認してください。',
       },
     ])
     return

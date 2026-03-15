@@ -30,6 +30,7 @@ type Department = Tables<'departments'>
 type FormData = {
   name: string
   name_kana: string
+  phone: string
   email: string
   password: string
   system_role: '' | '管理者' | '現場スタッフ'
@@ -44,6 +45,7 @@ type FormData = {
 const initialFormData: FormData = {
   name: '',
   name_kana: '',
+  phone: '',
   email: '',
   password: '',
   system_role: '',
@@ -53,6 +55,23 @@ const initialFormData: FormData = {
   department: '',
   fixed_overtime_hours: '20',
   status: '在籍',
+}
+
+// 電話番号をフォーマット表示（090-1234-5678形式）
+function formatPhone(phone: string | null): string {
+  if (!phone) return '-'
+  const digits = phone.replace(/\D/g, '')
+  if (digits.length === 11) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`
+  } else if (digits.length === 10) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
+  }
+  return phone
+}
+
+// 電話番号を正規化（数字のみ）
+function normalizePhone(phone: string): string {
+  return phone.replace(/[\s\-ー−\(\)（）]/g, '')
 }
 
 export function WorkerManagement() {
@@ -108,6 +127,7 @@ export function WorkerManagement() {
     setFormData({
       name: worker.name,
       name_kana: worker.name_kana,
+      phone: worker.phone || '',
       email: worker.email || '',
       password: '',
       system_role: worker.system_role || '',
@@ -168,6 +188,7 @@ export function WorkerManagement() {
         body: JSON.stringify({
           name: formData.name,
           name_kana: formData.name_kana,
+          phone: formData.phone ? normalizePhone(formData.phone) : null,
           email: formData.email || null,
           password: formData.password || null,
           system_role: formData.system_role || null,
@@ -232,6 +253,7 @@ export function WorkerManagement() {
           id: selectedWorker.id,
           name: formData.name,
           name_kana: formData.name_kana,
+          phone: formData.phone ? normalizePhone(formData.phone) : null,
           email: formData.email || null,
           password: formData.password || null,
           system_role: formData.system_role || null,
@@ -475,6 +497,7 @@ export function WorkerManagement() {
                   <tr className="border-b bg-gray-50">
                     <th className="text-left py-3 px-2 font-medium w-12">ID</th>
                     <th className="text-left py-3 px-4 font-medium">氏名</th>
+                    <th className="text-left py-3 px-3 font-medium">電話番号</th>
                     <th className="text-center py-3 px-2 font-medium">LINE</th>
                     <th className="text-left py-3 px-4 font-medium">権限</th>
                     <th className="text-center py-3 px-4 font-medium">
@@ -538,6 +561,7 @@ export function WorkerManagement() {
                       <tr key={worker.id} className="border-b hover:bg-gray-50">
                         <td className="py-3 px-2 text-gray-500 text-xs">{worker.id}</td>
                         <td className="py-3 px-4 font-medium">{worker.name}</td>
+                        <td className="py-3 px-3 text-sm text-gray-600">{formatPhone(worker.phone)}</td>
                         <td className="py-3 px-2 text-center">
                           {worker.line_user_id ? (
                             <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100" title="LINE連携済み">
@@ -614,7 +638,7 @@ export function WorkerManagement() {
             <DialogTitle>作業員を追加</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
-            {/* 氏名・カナ */}
+            {/* 氏名・カナ・電話番号 */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>氏名 <span className="text-red-500">*</span></Label>
@@ -632,6 +656,17 @@ export function WorkerManagement() {
                   placeholder="ヤマダタロウ"
                 />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>電話番号（LINE連携に使用）</Label>
+              <Input
+                type="tel"
+                value={formData.phone}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                placeholder="09012345678"
+              />
+              <p className="text-xs text-gray-500">ハイフンあり/なしどちらでも可</p>
             </div>
 
             {/* ログインアカウント */}
@@ -761,7 +796,7 @@ export function WorkerManagement() {
             <DialogTitle>作業員を編集</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
-            {/* 氏名・カナ */}
+            {/* 氏名・カナ・電話番号 */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>氏名 <span className="text-red-500">*</span></Label>
@@ -779,6 +814,17 @@ export function WorkerManagement() {
                   placeholder="ヤマダタロウ"
                 />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>電話番号（LINE連携に使用）</Label>
+              <Input
+                type="tel"
+                value={formData.phone}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                placeholder="09012345678"
+              />
+              <p className="text-xs text-gray-500">ハイフンあり/なしどちらでも可</p>
             </div>
 
             {/* ログインアカウント */}

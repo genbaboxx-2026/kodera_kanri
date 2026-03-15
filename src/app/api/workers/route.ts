@@ -19,6 +19,7 @@ export async function POST(request: NextRequest) {
     const {
       name,
       name_kana,
+      phone,
       email,
       password,
       system_role,
@@ -50,6 +51,7 @@ export async function POST(request: NextRequest) {
       .insert({
         name,
         name_kana,
+        phone: phone || null,
         email: email || null,
         system_role: system_role || null,
         can_edit_haichi: can_edit_haichi ?? false,
@@ -133,6 +135,7 @@ export async function PUT(request: NextRequest) {
       id,
       name,
       name_kana,
+      phone,
       email,
       password,
       system_role,
@@ -164,6 +167,7 @@ export async function PUT(request: NextRequest) {
       .update({
         name,
         name_kana,
+        phone: phone || null,
         email: email || null,
         system_role: system_role || null,
         can_edit_haichi: can_edit_haichi ?? false,
