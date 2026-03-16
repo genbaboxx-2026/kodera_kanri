@@ -17,9 +17,10 @@ interface Profile {
   display_name: string | null
   phone: string | null
   line_user_id: string | null
+  worker_id: number | null
 }
 
-// 電話番号フォーマット
+// 電話番号フォーマット（表示用）
 function formatPhone(phone: string | null): string {
   if (!phone) return '-'
   const digits = phone.replace(/\D/g, '')
@@ -31,6 +32,11 @@ function formatPhone(phone: string | null): string {
   return phone
 }
 
+// 電話番号正規化（保存用）
+function normalizePhone(phone: string): string {
+  return phone.replace(/[\s\-ー−\(\)（）]/g, '')
+}
+
 export default function MyPage() {
   const router = useRouter()
   const supabase = createClient()
@@ -39,7 +45,11 @@ export default function MyPage() {
   const [saving, setSaving] = useState(false)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [isEditing, setIsEditing] = useState(false)
+
+  // 編集用の状態
   const [editDisplayName, setEditDisplayName] = useState('')
+  const [editEmail, setEditEmail] = useState('')
+  const [editPhone, setEditPhone] = useState('')
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -52,7 +62,7 @@ export default function MyPage() {
 
     const { data: profileData } = await supabase
       .from('profiles')
-      .select('*, worker:workers(phone, line_user_id)')
+      .select('*, worker:workers(id, phone, line_user_id)')
       .eq('id', user.id)
       .single()
 
@@ -66,6 +76,7 @@ export default function MyPage() {
         display_name: profileData.display_name,
         phone: worker?.phone || null,
         line_user_id: worker?.line_user_id || null,
+        worker_id: worker?.id || null,
       })
     }
 
@@ -84,30 +95,86 @@ export default function MyPage() {
 
   const startEditing = () => {
     setEditDisplayName(profile?.display_name || '')
+    setEditEmail(profile?.email || '')
+    setEditPhone(profile?.phone || '')
     setIsEditing(true)
   }
 
   const cancelEditing = () => {
     setIsEditing(false)
     setEditDisplayName('')
+    setEditEmail('')
+    setEditPhone('')
   }
 
-  const saveDisplayName = async () => {
+  const saveProfile = async () => {
     if (!profile) return
 
     setSaving(true)
-    const { error } = await supabase
-      .from('profiles')
-      .update({ display_name: editDisplayName || null })
-      .eq('id', profile.id)
 
-    if (error) {
-      console.error('Error updating display name:', error)
-      alert('保存に失敗しました')
-    } else {
-      setProfile({ ...profile, display_name: editDisplayName || null })
+    try {
+      // profiles テーブルの display_name を更新
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ display_name: editDisplayName || null })
+        .eq('id', profile.id)
+
+      if (profileError) {
+        console.error('Error updating profile:', profileError)
+        alert('プロフィールの保存に失敗しました')
+        setSaving(false)
+        return
+      }
+
+      // workers テーブルの name, email, phone を更新（worker_idがある場合）
+      if (profile.worker_id) {
+        const normalizedPhone = normalizePhone(editPhone)
+        const { error: workerError } = await supabase
+          .from('workers')
+          .update({
+            name: editDisplayName || null,
+            email: editEmail || null,
+            phone: normalizedPhone || null,
+          })
+          .eq('id', profile.worker_id)
+
+        if (workerError) {
+          console.error('Error updating worker:', workerError)
+          alert('作業員情報の保存に失敗しました')
+          setSaving(false)
+          return
+        }
+      }
+
+      // メールアドレスが変更された場合、Supabase Authのメールも更新
+      if (editEmail !== profile.email) {
+        const { error: authError } = await supabase.auth.updateUser({
+          email: editEmail,
+        })
+
+        if (authError) {
+          console.error('Error updating auth email:', authError)
+          alert('メールアドレスの変更に失敗しました: ' + authError.message)
+          setSaving(false)
+          return
+        }
+
+        alert('メールアドレスの変更確認メールを送信しました。新しいメールアドレスで確認してください。')
+      }
+
+      // 状態を更新
+      setProfile({
+        ...profile,
+        display_name: editDisplayName || null,
+        email: editEmail,
+        phone: normalizePhone(editPhone) || null,
+      })
       setIsEditing(false)
+    } catch (error) {
+      console.error('Error saving profile:', error)
+      alert('保存に失敗しました')
     }
+
     setSaving(false)
   }
 
@@ -132,35 +199,24 @@ export default function MyPage() {
               <CardTitle>アカウント情報</CardTitle>
               <CardDescription>ログイン中のアカウント情報</CardDescription>
             </div>
-            {!isEditing && (
+            {!isEditing ? (
               <Button variant="ghost" size="sm" onClick={startEditing}>
                 <Pencil className="h-4 w-4 mr-1" />
                 編集
               </Button>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <p className="text-sm text-gray-500">名前</p>
-            {isEditing ? (
-              <div className="flex items-center gap-2 mt-1">
-                <Input
-                  value={editDisplayName}
-                  onChange={(e) => setEditDisplayName(e.target.value)}
-                  placeholder="名前を入力"
-                  className="max-w-xs"
-                />
+            ) : (
+              <div className="flex items-center gap-2">
                 <Button
                   size="sm"
-                  onClick={saveDisplayName}
+                  onClick={saveProfile}
                   disabled={saving}
                 >
                   {saving ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
                   ) : (
-                    <Check className="h-4 w-4" />
+                    <Check className="h-4 w-4 mr-1" />
                   )}
+                  保存
                 </Button>
                 <Button
                   size="sm"
@@ -168,20 +224,54 @@ export default function MyPage() {
                   onClick={cancelEditing}
                   disabled={saving}
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-4 w-4 mr-1" />
+                  キャンセル
                 </Button>
               </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <p className="text-sm text-gray-500">名前</p>
+            {isEditing ? (
+              <Input
+                value={editDisplayName}
+                onChange={(e) => setEditDisplayName(e.target.value)}
+                placeholder="名前を入力"
+                className="max-w-xs mt-1"
+              />
             ) : (
               <p className="font-medium">{profile?.display_name || '-'}</p>
             )}
           </div>
           <div>
             <p className="text-sm text-gray-500">メールアドレス</p>
-            <p className="font-medium">{profile?.email || '-'}</p>
+            {isEditing ? (
+              <Input
+                type="email"
+                value={editEmail}
+                onChange={(e) => setEditEmail(e.target.value)}
+                placeholder="メールアドレスを入力"
+                className="max-w-xs mt-1"
+              />
+            ) : (
+              <p className="font-medium">{profile?.email || '-'}</p>
+            )}
           </div>
           <div>
             <p className="text-sm text-gray-500">電話番号</p>
-            <p className="font-medium">{formatPhone(profile?.phone ?? null)}</p>
+            {isEditing ? (
+              <Input
+                type="tel"
+                value={editPhone}
+                onChange={(e) => setEditPhone(e.target.value)}
+                placeholder="09012345678"
+                className="max-w-xs mt-1"
+              />
+            ) : (
+              <p className="font-medium">{formatPhone(profile?.phone ?? null)}</p>
+            )}
           </div>
           <div>
             <p className="text-sm text-gray-500">LINE連携</p>
