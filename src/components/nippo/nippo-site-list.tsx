@@ -1,13 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { format, addDays, subDays, isAfter, startOfDay } from 'date-fns'
+import { format, subDays } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { DateNav } from '@/components/haichi/date-nav'
 import {
   ChevronRight,
   Check,
@@ -23,21 +22,18 @@ import type { Tables } from '@/types/database'
 type Site = Tables<'sites'> & {
   client_company?: Tables<'companies'>
 }
-type Assignment = Tables<'assignments'> & {
-  site?: Site
-}
-type DailyReport = Tables<'daily_reports'>
 
-interface SiteAssignment {
-  assignmentId: number
+interface SiteWithStatus {
   siteId: number
   siteName: string
   clientCompany: string
   contractType: '常用' | '請負'
-  shiftType: '日勤のみ' | '通し夜勤' | '夜勤のみ'
-  reportStatus: '未報告' | '報告済み' | '完了'
-  reportId: number | null
-  reportDate: string | null
+  // 今日の配置ID（あれば）
+  todayAssignmentId: number | null
+  // 今日のステータス
+  todayStatus: '未配置' | '未報告' | '報告済み' | '完了'
+  // 最後に報告した日付
+  lastReportedDate: string | null
 }
 
 interface NippoSiteListProps {
@@ -46,20 +42,19 @@ interface NippoSiteListProps {
 }
 
 export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
-  const [currentDate, setCurrentDate] = useState(new Date())
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState<number | null>(null)
-  const [siteAssignments, setSiteAssignments] = useState<SiteAssignment[]>([])
+  const [sites, setSites] = useState<SiteWithStatus[]>([])
 
   const supabase = createClient()
-  const today = startOfDay(new Date())
-  const isFutureDate = isAfter(startOfDay(currentDate), today)
-  const currentDateStr = format(currentDate, 'yyyy-MM-dd')
+  const today = format(new Date(), 'yyyy-MM-dd')
 
   const fetchData = useCallback(async () => {
     setLoading(true)
 
-    // 自分が職長として配置されている現場を取得
+    // 自分が職長として配置されている現場を取得（過去30日分）
+    const thirtyDaysAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
+
     const { data: assignmentWorkers } = await supabase
       .from('assignment_workers')
       .select(`
@@ -70,61 +65,124 @@ export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
           target_date,
           site_id,
           contract_type,
-          shift_type,
           site:sites(id, name, client_company:companies!sites_client_company_id_fkey(name))
         )
       `)
       .eq('worker_id', workerId)
       .eq('is_foreman', true)
-      .eq('assignment.target_date', currentDateStr)
+      .gte('assignment.target_date', thirtyDaysAgo)
+      .order('assignment(target_date)', { ascending: false })
 
     if (!assignmentWorkers || assignmentWorkers.length === 0) {
-      setSiteAssignments([])
+      setSites([])
       setLoading(false)
       return
     }
 
-    // 各配置の日報ステータスを取得
-    const assignmentIds = assignmentWorkers.map(aw => aw.assignment_id)
-    const { data: reports } = await supabase
-      .from('daily_reports')
-      .select('id, site_id, check_status, submitted_at')
-      .eq('report_date', currentDateStr)
-      .eq('reporter_id', workerId)
-
-    const reportMap = new Map(reports?.map(r => [r.site_id, r]) || [])
+    // 現場ごとにグループ化
+    const siteMap = new Map<number, {
+      siteId: number
+      siteName: string
+      clientCompany: string
+      contractType: '常用' | '請負'
+      todayAssignmentId: number | null
+      dates: string[]
+    }>()
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sites: SiteAssignment[] = assignmentWorkers.map((aw: any) => {
+    for (const aw of assignmentWorkers as any[]) {
       const assignment = aw.assignment
       const site = assignment?.site
-      const report = reportMap.get(assignment?.site_id)
+      const siteId = assignment?.site_id
 
-      let reportStatus: '未報告' | '報告済み' | '完了' = '未報告'
-      if (report) {
-        if (report.check_status === '完了') {
-          reportStatus = '完了'
+      if (!siteMap.has(siteId)) {
+        siteMap.set(siteId, {
+          siteId,
+          siteName: site?.name || '不明',
+          clientCompany: site?.client_company?.name || '',
+          contractType: assignment?.contract_type,
+          todayAssignmentId: null,
+          dates: [],
+        })
+      }
+
+      const siteData = siteMap.get(siteId)!
+      siteData.dates.push(assignment.target_date)
+
+      // 今日の配置があればセット
+      if (assignment.target_date === today) {
+        siteData.todayAssignmentId = assignment.id
+      }
+    }
+
+    // 各現場の日報ステータスを取得
+    const siteIds = Array.from(siteMap.keys())
+    const { data: reports } = await supabase
+      .from('daily_reports')
+      .select('id, site_id, report_date, check_status')
+      .in('site_id', siteIds)
+      .eq('reporter_id', workerId)
+      .gte('report_date', thirtyDaysAgo)
+      .order('report_date', { ascending: false })
+
+    // 現場ごとに最新の報告日を取得
+    const lastReportMap = new Map<number, { date: string; status: string }>()
+    const todayReportMap = new Map<number, string>()
+
+    for (const report of reports || []) {
+      // 今日の報告
+      if (report.report_date === today) {
+        todayReportMap.set(report.site_id, report.check_status)
+      }
+      // 最新の報告日
+      if (!lastReportMap.has(report.site_id)) {
+        lastReportMap.set(report.site_id, { date: report.report_date, status: report.check_status })
+      }
+    }
+
+    // 最終的なリストを作成
+    const siteList: SiteWithStatus[] = []
+
+    for (const [siteId, data] of siteMap) {
+      const todayReport = todayReportMap.get(siteId)
+      const lastReport = lastReportMap.get(siteId)
+
+      let todayStatus: '未配置' | '未報告' | '報告済み' | '完了' = '未配置'
+      if (data.todayAssignmentId) {
+        if (todayReport === '完了') {
+          todayStatus = '完了'
+        } else if (todayReport) {
+          todayStatus = '報告済み'
         } else {
-          reportStatus = '報告済み'
+          todayStatus = '未報告'
         }
       }
 
-      return {
-        assignmentId: assignment?.id,
-        siteId: assignment?.site_id,
-        siteName: site?.name || '不明',
-        clientCompany: site?.client_company?.name || '',
-        contractType: assignment?.contract_type,
-        shiftType: assignment?.shift_type,
-        reportStatus,
-        reportId: report?.id || null,
-        reportDate: report?.submitted_at || null,
-      }
+      siteList.push({
+        siteId,
+        siteName: data.siteName,
+        clientCompany: data.clientCompany,
+        contractType: data.contractType,
+        todayAssignmentId: data.todayAssignmentId,
+        todayStatus,
+        lastReportedDate: lastReport?.date || null,
+      })
+    }
+
+    // 今日の配置がある現場を上に、その中で未報告を上に
+    siteList.sort((a, b) => {
+      // 今日の配置がある方が上
+      if (a.todayAssignmentId && !b.todayAssignmentId) return -1
+      if (!a.todayAssignmentId && b.todayAssignmentId) return 1
+      // 未報告が上
+      if (a.todayStatus === '未報告' && b.todayStatus !== '未報告') return -1
+      if (a.todayStatus !== '未報告' && b.todayStatus === '未報告') return 1
+      return 0
     })
 
-    setSiteAssignments(sites)
+    setSites(siteList)
     setLoading(false)
-  }, [supabase, workerId, currentDateStr])
+  }, [supabase, workerId, today])
 
   useEffect(() => {
     if (workerId) {
@@ -132,59 +190,63 @@ export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
     }
   }, [fetchData, workerId])
 
-  const handlePrevDay = () => setCurrentDate(prev => subDays(prev, 1))
-  const handleNextDay = () => setCurrentDate(prev => addDays(prev, 1))
-
   // 完了にする
-  const handleMarkComplete = async (site: SiteAssignment) => {
-    if (!site.reportId) return
+  const handleMarkComplete = async (site: SiteWithStatus) => {
+    if (!site.todayAssignmentId) return
 
-    setSending(site.assignmentId)
+    setSending(site.siteId)
 
+    // 今日の日報を完了に
     await supabase
       .from('daily_reports')
       .update({ check_status: '完了' })
-      .eq('id', site.reportId)
+      .eq('site_id', site.siteId)
+      .eq('report_date', today)
+      .eq('reporter_id', workerId)
 
     await fetchData()
     setSending(null)
   }
 
   // 完了を取り消す
-  const handleUnmarkComplete = async (site: SiteAssignment) => {
-    if (!site.reportId) return
-
-    setSending(site.assignmentId)
+  const handleUnmarkComplete = async (site: SiteWithStatus) => {
+    setSending(site.siteId)
 
     await supabase
       .from('daily_reports')
       .update({ check_status: '提出済' })
-      .eq('id', site.reportId)
+      .eq('site_id', site.siteId)
+      .eq('report_date', today)
+      .eq('reporter_id', workerId)
 
     await fetchData()
     setSending(null)
   }
 
   // LINE完了通知を送る
-  const handleSendCompleteLine = async (site: SiteAssignment) => {
-    setSending(site.assignmentId)
+  const handleSendCompleteLine = async (site: SiteWithStatus) => {
+    setSending(site.siteId)
 
-    // TODO: LINE通知APIを呼び出す
-    // 今は完了ステータスに変更するだけ
-    if (site.reportId) {
-      await supabase
-        .from('daily_reports')
-        .update({ check_status: '完了' })
-        .eq('id', site.reportId)
-    }
+    await supabase
+      .from('daily_reports')
+      .update({ check_status: '完了' })
+      .eq('site_id', site.siteId)
+      .eq('report_date', today)
+      .eq('reporter_id', workerId)
 
     alert(`${site.siteName}の完了をLINEで通知しました`)
     await fetchData()
     setSending(null)
   }
 
-  const getStatusBadge = (status: '未報告' | '報告済み' | '完了') => {
+  const getStatusBadge = (status: '未配置' | '未報告' | '報告済み' | '完了') => {
     switch (status) {
+      case '未配置':
+        return (
+          <Badge variant="outline" className="bg-gray-100 text-gray-600 border-gray-300">
+            本日配置なし
+          </Badge>
+        )
       case '未報告':
         return (
           <Badge variant="outline" className="bg-yellow-100 text-yellow-800 border-yellow-300">
@@ -209,122 +271,109 @@ export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
     }
   }
 
+  const formatLastReportDate = (dateStr: string | null): string => {
+    if (!dateStr) return '報告なし'
+    const date = new Date(dateStr)
+    return `${format(date, 'M/d', { locale: ja })}まで報告済み`
+  }
+
   if (loading) {
     return (
-      <div className="flex flex-col">
-        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
-        <div className="p-4 text-center text-gray-500">読み込み中...</div>
-      </div>
+      <div className="p-4 text-center text-gray-500">読み込み中...</div>
     )
   }
 
-  if (isFutureDate) {
+  if (sites.length === 0) {
     return (
-      <div className="flex flex-col">
-        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
-        <div className="flex flex-col items-center justify-center p-8 text-center">
-          <AlertCircle className="h-12 w-12 text-gray-400 mb-4" />
-          <p className="text-gray-500 text-lg">まだ作業が行われていません</p>
-          <p className="text-gray-400 text-sm mt-2">過去の日付を選択してください</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (siteAssignments.length === 0) {
-    return (
-      <div className="flex flex-col">
-        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
-        <div className="flex flex-col items-center justify-center p-8 text-center">
-          <AlertCircle className="h-12 w-12 text-gray-400 mb-4" />
-          <p className="text-gray-500 text-lg">担当する現場がありません</p>
-          <p className="text-gray-400 text-sm mt-2">職長として配置されている現場のみ表示されます</p>
-        </div>
+      <div className="flex flex-col items-center justify-center p-8 text-center">
+        <AlertCircle className="h-12 w-12 text-gray-400 mb-4" />
+        <p className="text-gray-500 text-lg">担当する現場がありません</p>
+        <p className="text-gray-400 text-sm mt-2">職長として配置されている現場のみ表示されます</p>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col pb-4">
-      <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
-
-      {/* 現場リスト */}
-      <div className="space-y-3 p-4">
-        {siteAssignments.map(site => (
-          <Card
-            key={site.assignmentId}
-            className={cn(
-              "overflow-hidden",
-              site.reportStatus === '完了' && "opacity-60"
-            )}
-          >
-            <CardContent className="p-0">
-              {/* メインエリア（クリックで日報入力へ） */}
-              <button
-                className="w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors"
-                onClick={() => onSelectSite(site.assignmentId)}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium truncate">{site.siteName}</span>
-                      <Badge variant="secondary" className="text-xs shrink-0">
-                        {site.contractType}
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-gray-500 mt-0.5">{site.clientCompany}</p>
+    <div className="space-y-3 p-4">
+      {sites.map(site => (
+        <Card
+          key={site.siteId}
+          className={cn(
+            "overflow-hidden",
+            site.todayStatus === '完了' && "opacity-60",
+            !site.todayAssignmentId && "opacity-50"
+          )}
+        >
+          <CardContent className="p-0">
+            {/* メインエリア（クリックで日報入力へ） */}
+            <button
+              className="w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors disabled:cursor-not-allowed"
+              onClick={() => site.todayAssignmentId && onSelectSite(site.todayAssignmentId)}
+              disabled={!site.todayAssignmentId}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium truncate">{site.siteName}</span>
+                    <Badge variant="secondary" className="text-xs shrink-0">
+                      {site.contractType}
+                    </Badge>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0 ml-2">
-                    {getStatusBadge(site.reportStatus)}
-                    <ChevronRight className="h-5 w-5 text-gray-400" />
-                  </div>
+                  <p className="text-sm text-gray-500 mt-0.5">{site.clientCompany}</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {formatLastReportDate(site.lastReportedDate)}
+                  </p>
                 </div>
-              </button>
+                <div className="flex items-center gap-2 shrink-0 ml-2">
+                  {getStatusBadge(site.todayStatus)}
+                  {site.todayAssignmentId && <ChevronRight className="h-5 w-5 text-gray-400" />}
+                </div>
+              </div>
+            </button>
 
-              {/* アクションエリア（報告済み・完了の場合のみ） */}
-              {site.reportStatus !== '未報告' && (
-                <div className="flex items-center gap-2 border-t px-4 py-2 bg-gray-50">
-                  {site.reportStatus === '報告済み' ? (
-                    <>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1 text-green-600 border-green-300 hover:bg-green-50"
-                        onClick={() => handleMarkComplete(site)}
-                        disabled={sending === site.assignmentId}
-                      >
-                        <CheckCircle2 className="h-4 w-4 mr-1" />
-                        完了にする
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1"
-                        onClick={() => handleSendCompleteLine(site)}
-                        disabled={sending === site.assignmentId}
-                      >
-                        <Send className="h-4 w-4 mr-1" />
-                        完了LINE
-                      </Button>
-                    </>
-                  ) : (
+            {/* アクションエリア（報告済み・完了の場合のみ） */}
+            {site.todayAssignmentId && site.todayStatus !== '未報告' && site.todayStatus !== '未配置' && (
+              <div className="flex items-center gap-2 border-t px-4 py-2 bg-gray-50">
+                {site.todayStatus === '報告済み' ? (
+                  <>
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="sm"
-                      className="text-gray-500"
-                      onClick={() => handleUnmarkComplete(site)}
-                      disabled={sending === site.assignmentId}
+                      className="flex-1 text-green-600 border-green-300 hover:bg-green-50"
+                      onClick={() => handleMarkComplete(site)}
+                      disabled={sending === site.siteId}
                     >
-                      <RotateCcw className="h-4 w-4 mr-1" />
-                      完了を取り消す
+                      <CheckCircle2 className="h-4 w-4 mr-1" />
+                      完了にする
                     </Button>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => handleSendCompleteLine(site)}
+                      disabled={sending === site.siteId}
+                    >
+                      <Send className="h-4 w-4 mr-1" />
+                      完了LINE
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-gray-500"
+                    onClick={() => handleUnmarkComplete(site)}
+                    disabled={sending === site.siteId}
+                  >
+                    <RotateCcw className="h-4 w-4 mr-1" />
+                    完了を取り消す
+                  </Button>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ))}
     </div>
   )
 }
