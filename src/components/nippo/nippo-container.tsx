@@ -365,7 +365,8 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
         `)
         .eq('report_date', dateStr)
         .eq('reporter_id', workerId)
-        .single()
+        .limit(1)
+        .maybeSingle()
 
       if (existingReportData) {
         // 対応する配置も取得してshiftTypeを取得
@@ -377,7 +378,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
           `)
           .eq('target_date', dateStr)
           .eq('site_id', existingReportData.site_id)
-          .single()
+          .maybeSingle()
 
         // サインの有無を確認
         const { data: signatureData } = await supabase
@@ -385,7 +386,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
           .select('id')
           .eq('daily_report_id', existingReportData.id)
           .limit(1)
-          .single()
+          .maybeSingle()
 
         setHasSigned(!!signatureData)
 
@@ -416,7 +417,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
         .eq('is_foreman', true)
         .eq('assignment.target_date', dateStr)
         .limit(1)
-        .single()
+        .maybeSingle()
 
       if (assignmentWorker) {
         const { data: assignmentData } = await supabase
@@ -624,7 +625,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
       .select('id')
       .eq('record_date', currentDateStr)
       .eq('site_id', assignment.site_id)
-      .single()
+      .maybeSingle()
 
     if (existingDezura) {
       await supabase
