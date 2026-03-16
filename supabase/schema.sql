@@ -235,6 +235,20 @@ CREATE TABLE dezura_records (
 );
 CREATE INDEX idx_dezura_date ON dezura_records(record_date);
 
+-- N1: 変更通知の確認状態
+CREATE TABLE assignment_change_notifications (
+  id SERIAL PRIMARY KEY,
+  worker_id INT NOT NULL REFERENCES workers(id),
+  target_date DATE NOT NULL,
+  site_name TEXT NOT NULL,
+  change_type TEXT NOT NULL CHECK (change_type IN ('added', 'removed')),
+  confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+  confirmed_at TIMESTAMPTZ,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_change_notifications_worker_date ON assignment_change_notifications(worker_id, target_date);
+
 -- A1: 月次出勤集計
 CREATE TABLE attendance_monthly (
   id SERIAL PRIMARY KEY,
@@ -304,6 +318,7 @@ ALTER TABLE report_work_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE report_partners ENABLE ROW LEVEL SECURITY;
 ALTER TABLE signatures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dezura_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assignment_change_notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attendance_monthly ENABLE ROW LEVEL SECURITY;
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
@@ -341,6 +356,8 @@ CREATE POLICY "admin_staff_report_partners" ON report_partners FOR ALL
 CREATE POLICY "admin_staff_signatures" ON signatures FOR ALL
   USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('管理者', '現場スタッフ')));
 CREATE POLICY "admin_staff_dezura" ON dezura_records FOR ALL
+  USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('管理者', '現場スタッフ')));
+CREATE POLICY "admin_staff_change_notifications" ON assignment_change_notifications FOR ALL
   USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('管理者', '現場スタッフ')));
 CREATE POLICY "admin_staff_attendance" ON attendance_monthly FOR ALL
   USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('管理者', '現場スタッフ')));

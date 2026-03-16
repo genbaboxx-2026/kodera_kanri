@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { NippoSiteList } from './nippo-site-list'
 import { NippoContainer } from './nippo-container'
 import { Button } from '@/components/ui/button'
@@ -10,13 +9,12 @@ import { ChevronLeft } from 'lucide-react'
 interface NippoMainProps {
   userId: string
   workerId: number | null
-  initialAssignmentId?: number
+  initialSiteId?: number
   initialDate: string
 }
 
-export function NippoMain({ userId, workerId, initialAssignmentId, initialDate }: NippoMainProps) {
-  const router = useRouter()
-  const [selectedAssignmentId, setSelectedAssignmentId] = useState<number | null>(initialAssignmentId || null)
+export function NippoMain({ userId, workerId, initialSiteId, initialDate }: NippoMainProps) {
+  const [selectedSiteId, setSelectedSiteId] = useState<number | null>(initialSiteId || null)
 
   // worker_idがない場合はエラー表示
   if (!workerId) {
@@ -29,7 +27,7 @@ export function NippoMain({ userId, workerId, initialAssignmentId, initialDate }
   }
 
   // 現場が選択されている場合は日報入力画面を表示
-  if (selectedAssignmentId) {
+  if (selectedSiteId) {
     return (
       <div className="flex flex-col">
         {/* 戻るヘッダー */}
@@ -37,7 +35,7 @@ export function NippoMain({ userId, workerId, initialAssignmentId, initialDate }
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setSelectedAssignmentId(null)}
+            onClick={() => setSelectedSiteId(null)}
             className="text-gray-600"
           >
             <ChevronLeft className="h-5 w-5 mr-1" />
@@ -49,7 +47,7 @@ export function NippoMain({ userId, workerId, initialAssignmentId, initialDate }
         <NippoContainer
           userId={userId}
           workerId={workerId}
-          assignmentId={selectedAssignmentId}
+          siteId={selectedSiteId}
           targetDate={initialDate}
         />
       </div>
@@ -66,7 +64,7 @@ export function NippoMain({ userId, workerId, initialAssignmentId, initialDate }
 
       <NippoSiteList
         workerId={workerId}
-        onSelectSite={(assignmentId) => setSelectedAssignmentId(assignmentId)}
+        onSelectSite={(siteId) => setSelectedSiteId(siteId)}
       />
     </div>
   )

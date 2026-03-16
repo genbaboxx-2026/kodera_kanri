@@ -13,7 +13,7 @@ import { WorkerSelectModal } from './worker-select-modal'
 import { PartnerSelectModal } from './partner-select-modal'
 import { ConfirmationStatus } from './confirmation-status'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { Plus, Copy, Send, Crown, Check, ClipboardList } from 'lucide-react'
+import { Plus, Copy, Send, Crown, Check, ClipboardList, Pencil } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -45,12 +45,30 @@ interface HaichiContainerProps {
   userId: string
 }
 
+// 変更された作業員の情報
+interface WorkerChange {
+  workerId: number
+  workerName: string
+  siteName: string
+  changeType: 'added' | 'removed' | 'moved'
+  fromSiteName?: string  // 移動の場合のみ
+  toSiteName?: string    // 移動の場合のみ
+}
+
 export function HaichiContainer({ userId }: HaichiContainerProps) {
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [initialLoadDone, setInitialLoadDone] = useState(false)
   const [activeTab, setActiveTab] = useState<'haichi' | 'confirmation'>('haichi')
+  const [isEditing, setIsEditing] = useState(false)
+
+  // 編集開始時の作業員配置を保存（変更検出用）
+  const [originalWorkerAssignments, setOriginalWorkerAssignments] = useState<Map<number, { siteName: string, siteId: number }>>(new Map())
+
+  // 変更確認モーダル
+  const [changesModalOpen, setChangesModalOpen] = useState(false)
+  const [workerChanges, setWorkerChanges] = useState<WorkerChange[]>([])
 
   // マスターデータ
   const [workers, setWorkers] = useState<Worker[]>([])
@@ -102,11 +120,22 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
   )
 
   const isPublished = assignments.some(a => a.published_at !== null)
-  const confirmedCount = assignments.reduce(
-    (sum, a) => sum + (a.workers?.filter(w => w.confirmed).length || 0),
-    0
-  )
-  const unconfirmedCount = assignedCount - confirmedCount
+
+  // 作業員ごとにグループ化して確認状態を計算
+  const workerConfirmationMap = new Map<number, boolean>()
+  for (const assignment of assignments) {
+    for (const aw of assignment.workers || []) {
+      const existing = workerConfirmationMap.get(aw.worker_id)
+      if (existing === undefined) {
+        workerConfirmationMap.set(aw.worker_id, aw.confirmed)
+      } else if (existing && !aw.confirmed) {
+        // 1つでも未確認があれば未確認
+        workerConfirmationMap.set(aw.worker_id, false)
+      }
+    }
+  }
+  const confirmedCount = Array.from(workerConfirmationMap.values()).filter(v => v).length
+  const unconfirmedCount = workerConfirmationMap.size - confirmedCount
 
   // データ取得
   const fetchMasterData = useCallback(async () => {
@@ -178,8 +207,142 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
   }, [loading, initialLoadDone, assignments.length, assignmentLocations.length])
 
   // ハンドラ
-  const handlePrevDay = () => setSelectedDate(subDays(selectedDate, 1))
-  const handleNextDay = () => setSelectedDate(addDays(selectedDate, 1))
+  const handlePrevDay = () => {
+    setSelectedDate(subDays(selectedDate, 1))
+    setIsEditing(false)
+  }
+  const handleNextDay = () => {
+    setSelectedDate(addDays(selectedDate, 1))
+    setIsEditing(false)
+  }
+
+  // 編集モード開始 - 現在の作業員配置を保存
+  const startEditing = () => {
+    const workerMap = new Map<number, { siteName: string, siteId: number }>()
+    for (const assignment of assignments) {
+      for (const aw of assignment.workers || []) {
+        workerMap.set(aw.worker_id, {
+          siteName: assignment.site?.name || '不明',
+          siteId: assignment.site_id,
+        })
+      }
+    }
+    setOriginalWorkerAssignments(workerMap)
+    setIsEditing(true)
+  }
+
+  // 編集完了時 - 変更を検出してモーダル表示
+  const handleEditComplete = () => {
+    // 現在の作業員配置を取得
+    const currentWorkerMap = new Map<number, { siteName: string, siteId: number }>()
+    for (const assignment of assignments) {
+      for (const aw of assignment.workers || []) {
+        currentWorkerMap.set(aw.worker_id, {
+          siteName: assignment.site?.name || '不明',
+          siteId: assignment.site_id,
+        })
+      }
+    }
+
+    const changes: WorkerChange[] = []
+
+    // 追加された作業員を検出（新規追加）
+    for (const [workerId, info] of currentWorkerMap) {
+      if (!originalWorkerAssignments.has(workerId)) {
+        const worker = workers.find(w => w.id === workerId)
+        changes.push({
+          workerId,
+          workerName: worker?.name || '不明',
+          siteName: info.siteName,
+          changeType: 'added',
+        })
+      }
+    }
+
+    // 削除された作業員を検出（完全削除）
+    for (const [workerId, info] of originalWorkerAssignments) {
+      if (!currentWorkerMap.has(workerId)) {
+        const worker = workers.find(w => w.id === workerId)
+        changes.push({
+          workerId,
+          workerName: worker?.name || '不明',
+          siteName: info.siteName,
+          changeType: 'removed',
+        })
+      }
+    }
+
+    // 現場が変わった作業員を検出（移動）
+    for (const [workerId, originalInfo] of originalWorkerAssignments) {
+      const currentInfo = currentWorkerMap.get(workerId)
+      if (currentInfo && currentInfo.siteId !== originalInfo.siteId) {
+        const worker = workers.find(w => w.id === workerId)
+        // 移動として1件で記録
+        changes.push({
+          workerId,
+          workerName: worker?.name || '不明',
+          siteName: currentInfo.siteName, // 移動先
+          changeType: 'moved',
+          fromSiteName: originalInfo.siteName,
+          toSiteName: currentInfo.siteName,
+        })
+      }
+    }
+
+    if (changes.length > 0) {
+      // 変更がある場合はモーダルを表示
+      setWorkerChanges(changes)
+      setChangesModalOpen(true)
+    } else {
+      // 変更がない場合はそのまま閉じる
+      setIsEditing(false)
+    }
+  }
+
+  // 変更をLINE送信して完了
+  const handleConfirmChanges = async () => {
+    setChangesModalOpen(false)
+    setSaving(true)
+
+    try {
+      // 変更があった作業員にだけLINEを送信
+      const response = await fetch('/api/line/send-assignment-changes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetDate: dateString,
+          changes: workerChanges,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        alert(data.error || 'LINE送信に失敗しました')
+      } else {
+        let message = `変更通知を送信しました\n\n`
+        message += `送信成功: ${data.summary?.sent || 0}名\n`
+        if (data.summary?.noLineId > 0) {
+          message += `LINE未連携: ${data.summary.noLineId}名\n`
+        }
+        alert(message)
+      }
+    } catch (error) {
+      console.error('LINE send error:', error)
+      alert('LINE送信中にエラーが発生しました')
+    }
+
+    setSaving(false)
+    setIsEditing(false)
+    setWorkerChanges([])
+  }
+
+  // 変更をLINE送信せずに完了
+  const handleSkipLineAndComplete = () => {
+    setChangesModalOpen(false)
+    setIsEditing(false)
+    setWorkerChanges([])
+  }
 
   const handleAddWorkerToAssignment = async (
     assignmentId: number,
@@ -386,7 +549,7 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
       .select('id')
       .eq('assignment_id', assignmentId)
       .eq('worker_id', workerId)
-      .single()
+      .maybeSingle()
 
     if (existingWorker) {
       // 既存の作業員を職長に設定
@@ -591,7 +754,19 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
         </TabsList>
 
         <TabsContent value="haichi" className="mt-0">
-          {unassignedCount > 0 && (
+          {/* 配信完了ステータス */}
+          {isPublished && !isEditing && (
+            <div className="bg-green-100 border-b-2 border-green-300 px-4 py-3">
+              <div className="flex items-center justify-center gap-2">
+                <div className="flex items-center gap-2 bg-green-600 text-white px-4 py-1.5 rounded-full">
+                  <Check className="h-5 w-5" />
+                  <span className="font-bold">配信完了</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {unassignedCount > 0 && (!isPublished || isEditing) && (
             <UnassignedAlert workers={unassignedWorkers} />
           )}
 
@@ -618,7 +793,7 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
                   name: p.partner_company?.name || '',
                   headcount: p.headcount,
                 })) || []}
-                isReadOnly={isPastDate}
+                isReadOnly={isPastDate || (isPublished && !isEditing)}
                 onAddWorker={() => setWorkerModalState({
                   open: true,
                   assignmentId: assignment.id,
@@ -639,7 +814,7 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
             ))}
 
             {/* 現場追加ボタン - 場所・その他の上に配置 */}
-            {!isPastDate && (
+            {!isPastDate && (!isPublished || isEditing) && (
               <button
                 onClick={() => setIsAddSiteModalOpen(true)}
                 className="w-full rounded-lg border-2 border-dashed border-gray-300 p-4 text-center text-gray-500 hover:border-gray-400 hover:text-gray-600"
@@ -674,23 +849,61 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
       {!isPastDate && activeTab === 'haichi' && (
         <div className="fixed bottom-0 left-0 right-0 border-t bg-white p-4 safe-area-inset-bottom">
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={handleCopyPrevDay}
-              disabled={saving}
-            >
-              <Copy className="mr-2 h-4 w-4" />
-              前日コピー
-            </Button>
-            <Button
-              className="flex-1"
-              onClick={handlePublish}
-              disabled={saving}
-            >
-              <Send className="mr-2 h-4 w-4" />
-              LINE配信
-            </Button>
+            {isPublished && !isEditing ? (
+              // 配信完了状態 - 編集ボタンを表示
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={startEditing}
+              >
+                <Pencil className="mr-2 h-4 w-4" />
+                編集する
+              </Button>
+            ) : isEditing ? (
+              // 編集中 - キャンセルと更新完了ボタンを表示
+              <>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => {
+                    setIsEditing(false)
+                    fetchAssignments() // 元のデータに戻す
+                  }}
+                  disabled={saving}
+                >
+                  キャンセル
+                </Button>
+                <Button
+                  className="flex-1"
+                  onClick={handleEditComplete}
+                  disabled={saving}
+                >
+                  <Check className="mr-2 h-4 w-4" />
+                  編集完了
+                </Button>
+              </>
+            ) : (
+              // 未配信状態 - 前日コピーとLINE配信ボタン
+              <>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={handleCopyPrevDay}
+                  disabled={saving}
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  前日コピー
+                </Button>
+                <Button
+                  className="flex-1"
+                  onClick={handlePublish}
+                  disabled={saving}
+                >
+                  <Send className="mr-2 h-4 w-4" />
+                  LINE配信
+                </Button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -755,10 +968,13 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
               職長を選択
             </DialogTitle>
           </DialogHeader>
+          <p className="text-xs text-gray-500 mb-2">
+            ※ 同じ人を複数現場の職長に設定できます
+          </p>
           <div className="space-y-1">
             {foremanCandidates.length === 0 ? (
               <p className="py-4 text-center text-sm text-gray-500">
-                職長の役職を持つ作業員がいません
+                作業員がいません
               </p>
             ) : (
               foremanCandidates.map((worker) => {
@@ -766,6 +982,14 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
                 const isCurrentForeman = currentAssignment?.workers?.some(
                   w => w.worker_id === worker.id && (w as Tables<'assignment_workers'> & { is_foreman?: boolean }).is_foreman
                 )
+                // 他の現場で職長になっているかチェック
+                const otherForemanSites = assignments
+                  .filter(a => a.id !== foremanModalState.assignmentId)
+                  .filter(a => a.workers?.some(
+                    w => w.worker_id === worker.id && (w as Tables<'assignment_workers'> & { is_foreman?: boolean }).is_foreman
+                  ))
+                  .map(a => a.site?.name || '不明')
+
                 return (
                   <button
                     key={worker.id}
@@ -782,13 +1006,98 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
                     }}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-medium">{worker.name}</span>
+                      <div>
+                        <span className="font-medium">{worker.name}</span>
+                        {otherForemanSites.length > 0 && (
+                          <p className="text-xs text-gray-500">
+                            職長: {otherForemanSites.join(', ')}
+                          </p>
+                        )}
+                      </div>
                       {isCurrentForeman && <Check className="h-4 w-4 text-amber-600" />}
                     </div>
                   </button>
                 )
               })
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 変更確認モーダル */}
+      <Dialog open={changesModalOpen} onOpenChange={setChangesModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>配置変更の確認</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {workerChanges.filter(c => c.changeType === 'moved').length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium text-blue-700 mb-2">現場が変わった作業員</h4>
+                <div className="space-y-1">
+                  {workerChanges.filter(c => c.changeType === 'moved').map(change => (
+                    <div key={change.workerId} className="bg-blue-50 rounded-lg px-3 py-2">
+                      <span className="font-medium">{change.workerName}</span>
+                      <div className="text-sm text-blue-600 mt-1">
+                        {change.fromSiteName} → {change.toSiteName}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {workerChanges.filter(c => c.changeType === 'added').length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium text-green-700 mb-2">追加された作業員</h4>
+                <div className="space-y-1">
+                  {workerChanges.filter(c => c.changeType === 'added').map(change => (
+                    <div key={change.workerId} className="flex items-center justify-between bg-green-50 rounded-lg px-3 py-2">
+                      <span className="font-medium">{change.workerName}</span>
+                      <span className="text-sm text-green-600">→ {change.siteName}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {workerChanges.filter(c => c.changeType === 'removed').length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium text-red-700 mb-2">外された作業員</h4>
+                <div className="space-y-1">
+                  {workerChanges.filter(c => c.changeType === 'removed').map(change => (
+                    <div key={change.workerId} className="flex items-center justify-between bg-red-50 rounded-lg px-3 py-2">
+                      <span className="font-medium">{change.workerName}</span>
+                      <span className="text-sm text-red-600">← {change.siteName}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <p className="text-sm text-gray-500">
+              上記の作業員にLINEで変更通知を送信しますか？
+            </p>
+          </div>
+
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={handleSkipLineAndComplete}
+              disabled={saving}
+            >
+              送信しない
+            </Button>
+            <Button
+              className="flex-1"
+              onClick={handleConfirmChanges}
+              disabled={saving}
+            >
+              <Send className="mr-2 h-4 w-4" />
+              {saving ? '送信中...' : 'LINE送信'}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

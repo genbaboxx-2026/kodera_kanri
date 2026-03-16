@@ -127,7 +127,9 @@ async function handlePostback(event: {
   const data = new URLSearchParams(event.postback.data)
   const action = data.get('action')
   const assignmentWorkerId = data.get('assignment_worker_id')
+  const notificationId = data.get('notification_id')
 
+  // 通常の配置確認（単一）
   if (action === 'confirm' && assignmentWorkerId) {
     console.log(`User ${lineUserId} confirmed assignment_worker ${assignmentWorkerId}`)
 
@@ -156,6 +158,105 @@ async function handlePostback(event: {
       {
         type: 'text',
         text: '✅ 確認しました！\n\nお気をつけて現場へお向かいください。',
+      },
+    ])
+  }
+
+  // 複数現場の配置確認
+  const assignmentWorkerIds = data.get('assignment_worker_ids')
+  if (action === 'confirm_multi' && assignmentWorkerIds) {
+    const ids = assignmentWorkerIds.split(',').map(id => parseInt(id))
+    console.log(`User ${lineUserId} confirmed multiple assignment_workers: ${ids.join(', ')}`)
+
+    // 全てのassignment_workersを確認済みに更新
+    const { error } = await supabaseAdmin
+      .from('assignment_workers')
+      .update({
+        confirmed: true,
+        confirmed_at: new Date().toISOString(),
+      })
+      .in('id', ids)
+
+    if (error) {
+      console.error('Failed to update confirmation:', error)
+      await replyMessage(event.replyToken, [
+        {
+          type: 'text',
+          text: '確認の記録に失敗しました。もう一度お試しください。',
+        },
+      ])
+      return
+    }
+
+    // 確認完了メッセージを送信
+    const siteCount = ids.length
+    await replyMessage(event.replyToken, [
+      {
+        type: 'text',
+        text: `✅ ${siteCount}件の配置を確認しました！\n\nお気をつけて現場へお向かいください。`,
+      },
+    ])
+  }
+
+  // 変更通知の確認
+  if (action === 'confirm_change' && notificationId) {
+    console.log(`User ${lineUserId} confirmed change notification ${notificationId}`)
+
+    // まず既に確認済みかどうかチェック
+    const { data: notification, error: fetchError } = await supabaseAdmin
+      .from('assignment_change_notifications')
+      .select('id, confirmed, site_name, change_type')
+      .eq('id', parseInt(notificationId))
+      .single()
+
+    if (fetchError || !notification) {
+      console.error('Failed to fetch notification:', fetchError)
+      await replyMessage(event.replyToken, [
+        {
+          type: 'text',
+          text: '通知が見つかりませんでした。',
+        },
+      ])
+      return
+    }
+
+    // 既に確認済みの場合
+    if (notification.confirmed) {
+      await replyMessage(event.replyToken, [
+        {
+          type: 'text',
+          text: 'この変更通知は既に確認済みです。',
+        },
+      ])
+      return
+    }
+
+    // 確認状態を更新
+    const { error: updateError } = await supabaseAdmin
+      .from('assignment_change_notifications')
+      .update({
+        confirmed: true,
+        confirmed_at: new Date().toISOString(),
+      })
+      .eq('id', parseInt(notificationId))
+
+    if (updateError) {
+      console.error('Failed to update change notification confirmation:', updateError)
+      await replyMessage(event.replyToken, [
+        {
+          type: 'text',
+          text: '確認の記録に失敗しました。もう一度お試しください。',
+        },
+      ])
+      return
+    }
+
+    // 確認完了メッセージを送信
+    const changeTypeText = notification.change_type === 'added' ? '追加' : '解除'
+    await replyMessage(event.replyToken, [
+      {
+        type: 'text',
+        text: `✅ 変更を確認しました！\n\n${notification.site_name}への配置${changeTypeText}を確認しました。`,
       },
     ])
   }

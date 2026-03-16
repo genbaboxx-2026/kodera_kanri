@@ -20,18 +20,54 @@ interface ConfirmationStatusProps {
   isPublished: boolean
 }
 
-export function ConfirmationStatus({ assignments, isPublished }: ConfirmationStatusProps) {
-  // 全作業員をフラット化
-  const allWorkers = assignments.flatMap(a =>
-    (a.workers || []).map(w => ({
-      ...w,
-      siteName: a.site?.name || '不明',
-      assignmentId: a.id,
-    }))
-  )
+interface GroupedWorker {
+  workerId: number
+  workerName: string
+  siteNames: string[]
+  allConfirmed: boolean
+  confirmedAt: string | null
+  sentAt: string | null
+}
 
-  const confirmedWorkers = allWorkers.filter(w => w.confirmed)
-  const unconfirmedWorkers = allWorkers.filter(w => !w.confirmed)
+export function ConfirmationStatus({ assignments, isPublished }: ConfirmationStatusProps) {
+  // LINE送信時刻を取得（最初のpublished_at）
+  const publishedAt = assignments.find(a => a.published_at)?.published_at || null
+
+  // 作業員ごとにグループ化
+  const workerMap = new Map<number, GroupedWorker>()
+
+  for (const assignment of assignments) {
+    const siteName = assignment.site?.name || '不明'
+    for (const aw of assignment.workers || []) {
+      if (!aw.worker) continue
+
+      const existing = workerMap.get(aw.worker_id)
+      if (existing) {
+        existing.siteNames.push(siteName)
+        // 1つでも未確認があれば未確認
+        if (!aw.confirmed) {
+          existing.allConfirmed = false
+        }
+        // 最新の確認日時を使用
+        if (aw.confirmed_at && (!existing.confirmedAt || aw.confirmed_at > existing.confirmedAt)) {
+          existing.confirmedAt = aw.confirmed_at
+        }
+      } else {
+        workerMap.set(aw.worker_id, {
+          workerId: aw.worker_id,
+          workerName: aw.worker.name,
+          siteNames: [siteName],
+          allConfirmed: aw.confirmed,
+          confirmedAt: aw.confirmed_at,
+          sentAt: publishedAt,
+        })
+      }
+    }
+  }
+
+  const allWorkers = Array.from(workerMap.values())
+  const confirmedWorkers = allWorkers.filter(w => w.allConfirmed)
+  const unconfirmedWorkers = allWorkers.filter(w => !w.allConfirmed)
 
   if (!isPublished) {
     return (
@@ -51,8 +87,21 @@ export function ConfirmationStatus({ assignments, isPublished }: ConfirmationSta
     )
   }
 
+  // 現場名を結合する関数
+  const formatSiteNames = (siteNames: string[]) => {
+    if (siteNames.length === 1) return siteNames[0]
+    return siteNames.join('、')
+  }
+
   return (
     <div className="space-y-6 p-4">
+      {/* LINE送信時刻 */}
+      {publishedAt && (
+        <div className="text-center text-sm text-gray-500">
+          LINE送信: {format(new Date(publishedAt), 'M/d HH:mm', { locale: ja })}
+        </div>
+      )}
+
       {/* サマリー */}
       <div className="flex items-center justify-center gap-6 rounded-lg bg-gray-50 p-4">
         <div className="text-center">
@@ -81,16 +130,24 @@ export function ConfirmationStatus({ assignments, isPublished }: ConfirmationSta
           <div className="space-y-2">
             {unconfirmedWorkers.map((w) => (
               <div
-                key={w.id}
-                className="flex items-center justify-between rounded-lg border border-orange-200 bg-orange-50 px-4 py-3"
+                key={w.workerId}
+                className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3"
               >
-                <div>
-                  <div className="font-medium">{w.worker?.name || '不明'}</div>
-                  <div className="text-sm text-gray-600">{w.siteName}</div>
+                <div className="flex items-start justify-between">
+                  <div className="font-medium">{w.workerName}</div>
+                  {w.sentAt && (
+                    <div className="text-right text-xs text-gray-400">
+                      <div>送信</div>
+                      <div>{format(new Date(w.sentAt), 'M/d HH:mm', { locale: ja })}</div>
+                    </div>
+                  )}
                 </div>
-                <Badge variant="outline" className="border-orange-300 text-orange-700">
-                  未確認
-                </Badge>
+                <div className="flex items-end justify-between mt-1">
+                  <div className="text-sm text-gray-600">{formatSiteNames(w.siteNames)}</div>
+                  <Badge variant="outline" className="border-orange-300 text-orange-700">
+                    未確認
+                  </Badge>
+                </div>
               </div>
             ))}
           </div>
@@ -107,25 +164,27 @@ export function ConfirmationStatus({ assignments, isPublished }: ConfirmationSta
           <div className="space-y-2">
             {confirmedWorkers.map((w) => (
               <div
-                key={w.id}
-                className={cn(
-                  "flex items-center justify-between rounded-lg border px-4 py-3",
-                  "border-green-200 bg-green-50"
-                )}
+                key={w.workerId}
+                className="rounded-lg border border-green-200 bg-green-50 px-4 py-3"
               >
-                <div>
-                  <div className="font-medium">{w.worker?.name || '不明'}</div>
-                  <div className="text-sm text-gray-600">{w.siteName}</div>
+                <div className="flex items-start justify-between">
+                  <div className="font-medium">{w.workerName}</div>
+                  <div className="text-right text-xs text-gray-400">
+                    {w.sentAt && (
+                      <>
+                        <div>送信: {format(new Date(w.sentAt), 'M/d HH:mm', { locale: ja })}</div>
+                      </>
+                    )}
+                    {w.confirmedAt && (
+                      <div className="text-green-600">確認: {format(new Date(w.confirmedAt), 'M/d HH:mm', { locale: ja })}</div>
+                    )}
+                  </div>
                 </div>
-                <div className="text-right">
+                <div className="flex items-end justify-between mt-1">
+                  <div className="text-sm text-gray-600">{formatSiteNames(w.siteNames)}</div>
                   <Badge variant="outline" className="border-green-300 text-green-700">
                     確認済み
                   </Badge>
-                  {w.confirmed_at && (
-                    <div className="text-xs text-gray-500 mt-1">
-                      {format(new Date(w.confirmed_at), 'M/d HH:mm', { locale: ja })}
-                    </div>
-                  )}
                 </div>
               </div>
             ))}

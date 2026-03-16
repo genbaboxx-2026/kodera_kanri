@@ -7,12 +7,19 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
 import {
   ChevronRight,
   Check,
   Clock,
   AlertCircle,
-  Send,
   RotateCcw,
   CheckCircle2
 } from 'lucide-react'
@@ -38,13 +45,16 @@ interface SiteWithStatus {
 
 interface NippoSiteListProps {
   workerId: number
-  onSelectSite: (assignmentId: number) => void
+  onSelectSite: (siteId: number) => void
 }
 
 export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState<number | null>(null)
   const [sites, setSites] = useState<SiteWithStatus[]>([])
+  const [activeTab, setActiveTab] = useState<'active' | 'completed'>('active')
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
+  const [siteToComplete, setSiteToComplete] = useState<SiteWithStatus | null>(null)
 
   const supabase = createClient()
   const today = format(new Date(), 'yyyy-MM-dd')
@@ -149,7 +159,7 @@ export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
 
       let todayStatus: '未配置' | '未報告' | '報告済み' | '完了' = '未配置'
       if (data.todayAssignmentId) {
-        if (todayReport === '完了') {
+        if (todayReport === '確定') {
           todayStatus = '完了'
         } else if (todayReport) {
           todayStatus = '報告済み'
@@ -190,54 +200,64 @@ export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
     }
   }, [fetchData, workerId])
 
+  // 完了確認ダイアログを開く
+  const openCompleteConfirm = (site: SiteWithStatus) => {
+    setSiteToComplete(site)
+    setConfirmDialogOpen(true)
+  }
+
   // 完了にする
-  const handleMarkComplete = async (site: SiteWithStatus) => {
-    if (!site.todayAssignmentId) return
+  const handleMarkComplete = async () => {
+    if (!siteToComplete || !siteToComplete.todayAssignmentId) return
 
-    setSending(site.siteId)
+    setConfirmDialogOpen(false)
+    setSending(siteToComplete.siteId)
 
-    // 今日の日報を完了に
-    await supabase
+    // 今日の日報を確定に（reporter_idは指定しない - サイトと日付で特定）
+    const { error } = await supabase
       .from('daily_reports')
-      .update({ check_status: '完了' })
-      .eq('site_id', site.siteId)
+      .update({ check_status: '確定' })
+      .eq('site_id', siteToComplete.siteId)
       .eq('report_date', today)
-      .eq('reporter_id', workerId)
+
+    if (error) {
+      console.error('Error marking complete:', error)
+      alert('完了に失敗しました')
+      setSending(null)
+      setSiteToComplete(null)
+      return
+    }
 
     await fetchData()
     setSending(null)
+    setSiteToComplete(null)
+    // 完了タブに移動
+    setActiveTab('completed')
   }
 
   // 完了を取り消す
   const handleUnmarkComplete = async (site: SiteWithStatus) => {
     setSending(site.siteId)
 
-    await supabase
+    const { error } = await supabase
       .from('daily_reports')
       .update({ check_status: '提出済' })
       .eq('site_id', site.siteId)
       .eq('report_date', today)
-      .eq('reporter_id', workerId)
+
+    if (error) {
+      console.error('Error unmarking complete:', error)
+      alert('取り消しに失敗しました')
+      setSending(null)
+      return
+    }
 
     await fetchData()
     setSending(null)
+    // 対応中タブに移動
+    setActiveTab('active')
   }
 
-  // LINE完了通知を送る
-  const handleSendCompleteLine = async (site: SiteWithStatus) => {
-    setSending(site.siteId)
-
-    await supabase
-      .from('daily_reports')
-      .update({ check_status: '完了' })
-      .eq('site_id', site.siteId)
-      .eq('report_date', today)
-      .eq('reporter_id', workerId)
-
-    alert(`${site.siteName}の完了をLINEで通知しました`)
-    await fetchData()
-    setSending(null)
-  }
 
   const getStatusBadge = (status: '未配置' | '未報告' | '報告済み' | '完了') => {
     switch (status) {
@@ -277,6 +297,10 @@ export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
     return `${format(date, 'M/d', { locale: ja })}まで報告済み`
   }
 
+  // タブごとにサイトをフィルタリング
+  const activeSites = sites.filter(site => site.todayStatus !== '完了')
+  const completedSites = sites.filter(site => site.todayStatus === '完了')
+
   if (loading) {
     return (
       <div className="p-4 text-center text-gray-500">読み込み中...</div>
@@ -293,87 +317,132 @@ export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
     )
   }
 
-  return (
-    <div className="space-y-3 p-4">
-      {sites.map(site => (
-        <Card
-          key={site.siteId}
-          className={cn(
-            "overflow-hidden",
-            site.todayStatus === '完了' && "opacity-60",
-            !site.todayAssignmentId && "opacity-50"
-          )}
+  const renderSiteCard = (site: SiteWithStatus) => (
+    <Card
+      key={site.siteId}
+      className="overflow-hidden"
+    >
+      <CardContent className="p-0">
+        {/* メインエリア（クリックで日報入力へ） */}
+        <button
+          className="w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+          onClick={() => onSelectSite(site.siteId)}
         >
-          <CardContent className="p-0">
-            {/* メインエリア（クリックで日報入力へ） */}
-            <button
-              className="w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors disabled:cursor-not-allowed"
-              onClick={() => site.todayAssignmentId && onSelectSite(site.todayAssignmentId)}
-              disabled={!site.todayAssignmentId}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium truncate">{site.siteName}</span>
-                    <Badge variant="secondary" className="text-xs shrink-0">
-                      {site.contractType}
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-gray-500 mt-0.5">{site.clientCompany}</p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    {formatLastReportDate(site.lastReportedDate)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0 ml-2">
-                  {getStatusBadge(site.todayStatus)}
-                  {site.todayAssignmentId && <ChevronRight className="h-5 w-5 text-gray-400" />}
-                </div>
+          <div className="flex items-center justify-between">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-medium truncate">{site.siteName}</span>
+                <Badge variant="secondary" className="text-xs shrink-0">
+                  {site.contractType}
+                </Badge>
               </div>
-            </button>
+              <p className="text-sm text-gray-500 mt-0.5">{site.clientCompany}</p>
+              <p className="text-xs text-gray-400 mt-1">
+                {formatLastReportDate(site.lastReportedDate)}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 ml-2">
+              {getStatusBadge(site.todayStatus)}
+              <ChevronRight className="h-5 w-5 text-gray-400" />
+            </div>
+          </div>
+        </button>
 
-            {/* アクションエリア（報告済み・完了の場合のみ） */}
-            {site.todayAssignmentId && site.todayStatus !== '未報告' && site.todayStatus !== '未配置' && (
-              <div className="flex items-center gap-2 border-t px-4 py-2 bg-gray-50">
-                {site.todayStatus === '報告済み' ? (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1 text-green-600 border-green-300 hover:bg-green-50"
-                      onClick={() => handleMarkComplete(site)}
-                      disabled={sending === site.siteId}
-                    >
-                      <CheckCircle2 className="h-4 w-4 mr-1" />
-                      完了にする
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => handleSendCompleteLine(site)}
-                      disabled={sending === site.siteId}
-                    >
-                      <Send className="h-4 w-4 mr-1" />
-                      完了LINE
-                    </Button>
-                  </>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-gray-500"
-                    onClick={() => handleUnmarkComplete(site)}
-                    disabled={sending === site.siteId}
-                  >
-                    <RotateCcw className="h-4 w-4 mr-1" />
-                    完了を取り消す
-                  </Button>
-                )}
-              </div>
+        {/* アクションエリア（報告済み・完了の場合のみ） */}
+        {site.todayAssignmentId && site.todayStatus !== '未報告' && site.todayStatus !== '未配置' && (
+          <div className="flex items-center gap-2 border-t px-4 py-2 bg-gray-50">
+            {site.todayStatus === '報告済み' ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 text-green-600 border-green-300 hover:bg-green-50"
+                onClick={() => openCompleteConfirm(site)}
+                disabled={sending === site.siteId}
+              >
+                <CheckCircle2 className="h-4 w-4 mr-1" />
+                完了にする
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-gray-500"
+                onClick={() => handleUnmarkComplete(site)}
+                disabled={sending === site.siteId}
+              >
+                <RotateCcw className="h-4 w-4 mr-1" />
+                完了を取り消す
+              </Button>
             )}
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+
+  return (
+    <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'active' | 'completed')} className="flex flex-col">
+      <TabsList className="grid w-full grid-cols-2 mx-4 mt-2" style={{ width: 'calc(100% - 2rem)' }}>
+        <TabsTrigger value="active">
+          対応中 {activeSites.length > 0 && `(${activeSites.length})`}
+        </TabsTrigger>
+        <TabsTrigger value="completed">
+          完了 {completedSites.length > 0 && `(${completedSites.length})`}
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="active" className="mt-0">
+        {activeSites.length === 0 ? (
+          <div className="flex flex-col items-center justify-center p-8 text-center">
+            <CheckCircle2 className="h-12 w-12 text-green-400 mb-4" />
+            <p className="text-gray-500 text-lg">すべて完了しました</p>
+          </div>
+        ) : (
+          <div className="space-y-3 p-4">
+            {activeSites.map(renderSiteCard)}
+          </div>
+        )}
+      </TabsContent>
+
+      <TabsContent value="completed" className="mt-0">
+        {completedSites.length === 0 ? (
+          <div className="flex flex-col items-center justify-center p-8 text-center">
+            <AlertCircle className="h-12 w-12 text-gray-400 mb-4" />
+            <p className="text-gray-500 text-lg">完了した現場はありません</p>
+          </div>
+        ) : (
+          <div className="space-y-3 p-4">
+            {completedSites.map(renderSiteCard)}
+          </div>
+        )}
+      </TabsContent>
+
+      {/* 完了確認ダイアログ */}
+      <Dialog open={confirmDialogOpen} onOpenChange={setConfirmDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>完了確認</DialogTitle>
+            <DialogDescription>
+              {siteToComplete?.siteName}の日報を完了にしますか？
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-2 mt-4">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setConfirmDialogOpen(false)}
+            >
+              キャンセル
+            </Button>
+            <Button
+              className="flex-1 bg-green-600 hover:bg-green-700"
+              onClick={handleMarkComplete}
+            >
+              完了にする
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Tabs>
   )
 }

@@ -31,9 +31,6 @@ export function UnassignedAlert({ workers }: UnassignedAlertProps) {
             <p className="text-sm font-medium text-red-800">
               未配置: {workers.length}名
             </p>
-            <p className="text-sm text-red-600 mt-1 line-clamp-2">
-              {workers.map(w => w.name).join('、')}
-            </p>
           </div>
           <Button
             variant="ghost"

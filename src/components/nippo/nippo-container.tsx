@@ -49,8 +49,8 @@ type WorkCategory = Tables<'work_categories'>
 
 interface NippoContainerProps {
   userId: string
-  workerId: number | null
-  assignmentId?: number
+  workerId: number
+  siteId: number
   targetDate: string
 }
 
@@ -73,7 +73,7 @@ interface PartnerRowData {
   overtimeHours: number
 }
 
-export function NippoContainer({ userId, workerId, assignmentId, targetDate }: NippoContainerProps) {
+export function NippoContainer({ userId, workerId, siteId, targetDate }: NippoContainerProps) {
   const router = useRouter()
   const supabase = createClient()
 
@@ -112,6 +112,9 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
   // 編集中の行
   const [editingWorkerId, setEditingWorkerId] = useState<number | null>(null)
   const [editingPartnerId, setEditingPartnerId] = useState<number | null>(null)
+
+  // 編集モード
+  const [isEditing, setIsEditing] = useState(false)
 
   // 日付の状態
   const today = startOfDay(new Date())
@@ -249,6 +252,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     setRemarks('')
     setForemanWorkerId(null)
     setHasSigned(false)
+    setIsEditing(false)
   }
 
   // 配置データをプリセットする共通関数
@@ -353,144 +357,55 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     if (workersRes.data) setAllWorkers(workersRes.data)
     if (partnersRes.data) setAllPartners(partnersRes.data)
 
-    // assignmentIdが指定されている場合はその配置を使う
-    if (assignmentId) {
-      const { data: assignmentData } = await supabase
-        .from('assignments')
-        .select(`
-          *,
-          site:sites(*, client_company:companies!sites_client_company_id_fkey(*), payer_company:companies!sites_payer_company_id_fkey(*)),
-          workers:assignment_workers(*, worker:workers(*)),
-          partners:assignment_partners(*, partner_company:partner_companies(*))
-        `)
-        .eq('id', assignmentId)
-        .single()
+    // siteId + 日付で配置を検索
+    const { data: assignmentData } = await supabase
+      .from('assignments')
+      .select(`
+        *,
+        site:sites(*, client_company:companies!sites_client_company_id_fkey(*), payer_company:companies!sites_payer_company_id_fkey(*)),
+        workers:assignment_workers(*, worker:workers(*)),
+        partners:assignment_partners(*, partner_company:partner_companies(*))
+      `)
+      .eq('site_id', siteId)
+      .eq('target_date', dateStr)
+      .maybeSingle()
 
+    // 既存の日報を検索
+    const { data: existingReportData } = await supabase
+      .from('daily_reports')
+      .select(`
+        *,
+        site:sites(*, client_company:companies!sites_client_company_id_fkey(*), payer_company:companies!sites_payer_company_id_fkey(*)),
+        report_workers:report_workers(*, worker:workers(*)),
+        report_partners:report_partners(*, partner_company:partner_companies(*))
+      `)
+      .eq('report_date', dateStr)
+      .eq('site_id', siteId)
+      .eq('reporter_id', workerId)
+      .limit(1)
+      .maybeSingle()
+
+    if (existingReportData) {
+      // サインの有無を確認
+      const { data: signatureData } = await supabase
+        .from('signatures')
+        .select('id')
+        .eq('daily_report_id', existingReportData.id)
+        .limit(1)
+        .maybeSingle()
+
+      setHasSigned(!!signatureData)
       if (assignmentData) {
-        // この配置の既存日報を検索
-        const { data: existingReportData } = await supabase
-          .from('daily_reports')
-          .select(`
-            *,
-            site:sites(*, client_company:companies!sites_client_company_id_fkey(*), payer_company:companies!sites_payer_company_id_fkey(*)),
-            report_workers:report_workers(*, worker:workers(*)),
-            report_partners:report_partners(*, partner_company:partner_companies(*))
-          `)
-          .eq('report_date', assignmentData.target_date)
-          .eq('site_id', assignmentData.site_id)
-          .eq('reporter_id', workerId || 0)
-          .limit(1)
-          .maybeSingle()
-
-        if (existingReportData) {
-          // サインの有無を確認
-          const { data: signatureData } = await supabase
-            .from('signatures')
-            .select('id')
-            .eq('daily_report_id', existingReportData.id)
-            .limit(1)
-            .maybeSingle()
-
-          setHasSigned(!!signatureData)
-          setAssignment(assignmentData as Assignment)
-          applyExistingReport(existingReportData as DailyReport, assignmentData.shift_type)
-        } else {
-          // 新規日報 - 配置データをプリセット
-          applyAssignmentPreset(assignmentData as Assignment)
-        }
+        setAssignment(assignmentData as Assignment)
       }
-
-      setLoading(false)
-      return
-    }
-
-    // assignmentIdがない場合は従来のロジック（互換性のため）
-    // まず既存の日報を検索（職長の日報）
-    if (workerId) {
-      const { data: existingReportData } = await supabase
-        .from('daily_reports')
-        .select(`
-          *,
-          site:sites(*, client_company:companies!sites_client_company_id_fkey(*), payer_company:companies!sites_payer_company_id_fkey(*)),
-          report_workers:report_workers(*, worker:workers(*)),
-          report_partners:report_partners(*, partner_company:partner_companies(*))
-        `)
-        .eq('report_date', dateStr)
-        .eq('reporter_id', workerId)
-        .limit(1)
-        .maybeSingle()
-
-      if (existingReportData) {
-        // 対応する配置も取得してshiftTypeを取得
-        const { data: assignmentData } = await supabase
-          .from('assignments')
-          .select(`
-            *,
-            site:sites(*, client_company:companies!sites_client_company_id_fkey(*), payer_company:companies!sites_payer_company_id_fkey(*))
-          `)
-          .eq('target_date', dateStr)
-          .eq('site_id', existingReportData.site_id)
-          .maybeSingle()
-
-        // サインの有無を確認
-        const { data: signatureData } = await supabase
-          .from('signatures')
-          .select('id')
-          .eq('daily_report_id', existingReportData.id)
-          .limit(1)
-          .maybeSingle()
-
-        setHasSigned(!!signatureData)
-
-        // 既存の日報がある場合は表示
-        applyExistingReport(
-          existingReportData as DailyReport,
-          (assignmentData as Assignment)?.shift_type
-        )
-
-        if (assignmentData) {
-          setAssignment(assignmentData as Assignment)
-        }
-        setLoading(false)
-        return
-      }
-    }
-
-    // 既存の日報がない場合は配置データを検索してプリセット
-    if (workerId) {
-      const { data: assignmentWorker } = await supabase
-        .from('assignment_workers')
-        .select(`
-          assignment_id,
-          is_foreman,
-          assignment:assignments!inner(id, target_date)
-        `)
-        .eq('worker_id', workerId)
-        .eq('is_foreman', true)
-        .eq('assignment.target_date', dateStr)
-        .limit(1)
-        .maybeSingle()
-
-      if (assignmentWorker) {
-        const { data: assignmentData } = await supabase
-          .from('assignments')
-          .select(`
-            *,
-            site:sites(*, client_company:companies!sites_client_company_id_fkey(*), payer_company:companies!sites_payer_company_id_fkey(*)),
-            workers:assignment_workers(*, worker:workers(*)),
-            partners:assignment_partners(*, partner_company:partner_companies(*))
-          `)
-          .eq('id', assignmentWorker.assignment_id)
-          .single()
-
-        if (assignmentData) {
-          applyAssignmentPreset(assignmentData as Assignment)
-        }
-      }
+      applyExistingReport(existingReportData as DailyReport, assignmentData?.shift_type)
+    } else if (assignmentData) {
+      // 新規日報 - 配置データをプリセット
+      applyAssignmentPreset(assignmentData as Assignment)
     }
 
     setLoading(false)
-  }, [supabase, workerId, currentDate, assignmentId])
+  }, [supabase, workerId, siteId, currentDate])
 
   useEffect(() => {
     fetchData()
@@ -601,7 +516,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     }
   }
 
-  // 実際の日報提出処理
+  // 実際の日報提出処理（新規作成または更新）
   const executeSubmit = async (): Promise<number | null> => {
     if (!assignment) return null
 
@@ -609,38 +524,76 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     const headcountJouyo = contractType === '常用' ? workerRows.length : 0
     const headcountUkeoi = contractType === '請負' ? workerRows.length : 0
 
-    const { data: report, error: reportError } = await supabase
-      .from('daily_reports')
-      .insert({
-        report_date: currentDateStr,
-        site_id: assignment.site_id,
-        reporter_id: foremanWorkerId || workerId || 1,
-        contract_type: contractType,
-        work_start: defaultWorkStart,
-        work_end: defaultWorkEnd,
-        night_start: shiftType === '通し夜勤' ? nightWorkStart : null,
-        night_end: shiftType === '通し夜勤' ? nightWorkEnd : null,
-        headcount_total: headcountTotal,
-        headcount_jouyo: headcountJouyo,
-        headcount_ukeoi: headcountUkeoi,
-        work_detail: workDetail || null,
-        remarks: remarks || null,
-        check_status: '提出済',
-        submitted_at: new Date().toISOString(),
-      })
-      .select()
-      .single()
+    let reportId: number
 
-    if (reportError || !report) {
-      console.error('Error creating report:', reportError)
-      alert('日報の作成に失敗しました')
-      return null
+    // 既存の日報がある場合は更新、なければ新規作成
+    if (existingReport) {
+      // 更新
+      const { error: updateError } = await supabase
+        .from('daily_reports')
+        .update({
+          contract_type: contractType,
+          work_start: defaultWorkStart,
+          work_end: defaultWorkEnd,
+          night_start: shiftType === '通し夜勤' ? nightWorkStart : null,
+          night_end: shiftType === '通し夜勤' ? nightWorkEnd : null,
+          headcount_total: headcountTotal,
+          headcount_jouyo: headcountJouyo,
+          headcount_ukeoi: headcountUkeoi,
+          work_detail: workDetail || null,
+          remarks: remarks || null,
+        })
+        .eq('id', existingReport.id)
+
+      if (updateError) {
+        console.error('Error updating report:', updateError)
+        alert('日報の更新に失敗しました')
+        return null
+      }
+
+      reportId = existingReport.id
+
+      // 既存の関連データを削除してから再作成
+      await supabase.from('report_workers').delete().eq('daily_report_id', reportId)
+      await supabase.from('report_work_categories').delete().eq('daily_report_id', reportId)
+      await supabase.from('report_partners').delete().eq('daily_report_id', reportId)
+    } else {
+      // 新規作成
+      const { data: report, error: reportError } = await supabase
+        .from('daily_reports')
+        .insert({
+          report_date: currentDateStr,
+          site_id: assignment.site_id,
+          reporter_id: foremanWorkerId || workerId || 1,
+          contract_type: contractType,
+          work_start: defaultWorkStart,
+          work_end: defaultWorkEnd,
+          night_start: shiftType === '通し夜勤' ? nightWorkStart : null,
+          night_end: shiftType === '通し夜勤' ? nightWorkEnd : null,
+          headcount_total: headcountTotal,
+          headcount_jouyo: headcountJouyo,
+          headcount_ukeoi: headcountUkeoi,
+          work_detail: workDetail || null,
+          remarks: remarks || null,
+          check_status: '提出済',
+          submitted_at: new Date().toISOString(),
+        })
+        .select()
+        .single()
+
+      if (reportError || !report) {
+        console.error('Error creating report:', reportError)
+        alert('日報の作成に失敗しました')
+        return null
+      }
+
+      reportId = report.id
     }
 
     if (workerRows.length > 0) {
       await supabase.from('report_workers').insert(
         workerRows.map(w => ({
-          daily_report_id: report.id,
+          daily_report_id: reportId,
           worker_id: w.workerId,
           work_start: w.startTime,
           work_end: w.endTime,
@@ -652,7 +605,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     if (selectedCategories.length > 0) {
       await supabase.from('report_work_categories').insert(
         selectedCategories.map(categoryId => ({
-          daily_report_id: report.id,
+          daily_report_id: reportId,
           work_category_id: categoryId,
         }))
       )
@@ -661,7 +614,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     if (partnerRows.length > 0) {
       await supabase.from('report_partners').insert(
         partnerRows.map(p => ({
-          daily_report_id: report.id,
+          daily_report_id: reportId,
           partner_company_id: p.partnerCompanyId,
           headcount: p.headcount,
           work_start: p.startTime,
@@ -671,34 +624,36 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
       )
     }
 
-    // dezura_recordsを作成または更新
-    const { data: existingDezura } = await supabase
-      .from('dezura_records')
-      .select('id')
-      .eq('record_date', currentDateStr)
-      .eq('site_id', assignment.site_id)
-      .maybeSingle()
-
-    if (existingDezura) {
-      await supabase
+    // dezura_recordsを作成または更新（新規作成時のみ）
+    if (!existingReport) {
+      const { data: existingDezura } = await supabase
         .from('dezura_records')
-        .update({
-          daily_report_id: report.id,
+        .select('id')
+        .eq('record_date', currentDateStr)
+        .eq('site_id', assignment.site_id)
+        .maybeSingle()
+
+      if (existingDezura) {
+        await supabase
+          .from('dezura_records')
+          .update({
+            daily_report_id: reportId,
+            assignment_id: assignment.id,
+            check_status: '未提出',
+          })
+          .eq('id', existingDezura.id)
+      } else {
+        await supabase.from('dezura_records').insert({
+          record_date: currentDateStr,
+          site_id: assignment.site_id,
           assignment_id: assignment.id,
+          daily_report_id: reportId,
           check_status: '未提出',
         })
-        .eq('id', existingDezura.id)
-    } else {
-      await supabase.from('dezura_records').insert({
-        record_date: currentDateStr,
-        site_id: assignment.site_id,
-        assignment_id: assignment.id,
-        daily_report_id: report.id,
-        check_status: '未提出',
-      })
+      }
     }
 
-    return report.id
+    return reportId
   }
 
   // 確認ダイアログから提出
@@ -717,13 +672,10 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     }
   }
 
-  // assignmentIdがある場合は日付ナビを非表示
-  const showDateNav = !assignmentId
-
   if (loading) {
     return (
       <div className="flex flex-col">
-        {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
+        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
         <div className="p-4 text-center text-gray-500">読み込み中...</div>
       </div>
     )
@@ -733,7 +685,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
   if (isFutureDate) {
     return (
       <div className="flex flex-col">
-        {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
+        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
         <div className="flex flex-col items-center justify-center p-8 text-center">
           <AlertCircle className="h-12 w-12 text-gray-400 mb-4" />
           <p className="text-gray-500 text-lg">まだ作業が行われていません</p>
@@ -743,18 +695,28 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     )
   }
 
-  // 提出済みの場合（閲覧モード）
-  if (isSubmitted) {
+  // 提出済みの場合（閲覧モード）- 編集モードでなければ表示
+  if (isSubmitted && !isEditing) {
     return (
       <div className="flex flex-col">
-        {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
+        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
 
-        {/* 報告済みバッジ - 目立つように表示 */}
-        <div className="bg-green-100 border-b-2 border-green-300 px-4 py-4">
+        {/* ステータスバッジ - 目立つように表示 */}
+        <div className={cn(
+          "border-b-2 px-4 py-4",
+          existingReport?.check_status === '確定'
+            ? "bg-purple-100 border-purple-300"
+            : "bg-green-100 border-green-300"
+        )}>
           <div className="flex items-center justify-center gap-4">
-            <div className="flex items-center gap-2 bg-green-600 text-white px-4 py-1.5 rounded-full">
+            <div className={cn(
+              "flex items-center gap-2 text-white px-4 py-1.5 rounded-full",
+              existingReport?.check_status === '確定' ? "bg-purple-600" : "bg-green-600"
+            )}>
               <Check className="h-5 w-5" />
-              <span className="font-bold">報告済み</span>
+              <span className="font-bold">
+                {existingReport?.check_status === '確定' ? '報告完了済み' : '報告済み'}
+              </span>
             </div>
             {hasSigned && (
               <div className="flex items-center gap-1 bg-blue-600 text-white px-3 py-1.5 rounded-full text-sm">
@@ -902,9 +864,13 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
                 サインをもらう
               </Button>
             )}
-            <Button className="flex-1" disabled>
-              <Check className="mr-2 h-4 w-4" />
-              提出済み
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setIsEditing(true)}
+            >
+              <Pencil className="mr-2 h-4 w-4" />
+              編集する
             </Button>
           </div>
         </div>
@@ -916,7 +882,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
   if (!assignment) {
     return (
       <div className="flex flex-col">
-        {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
+        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
         <div className="flex flex-col items-center justify-center p-8 text-center">
           <AlertCircle className="h-12 w-12 text-gray-400 mb-4" />
           <p className="text-gray-500 text-lg">この日の配置データがありません</p>
@@ -934,7 +900,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
   return (
     <div className="flex flex-col">
       {/* 日付ナビゲーション */}
-      {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
+      <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
 
       <div className="space-y-4 p-4 pb-24">
         {/* 現場情報 */}
@@ -1239,15 +1205,36 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
       {/* フッター */}
       <div className="fixed bottom-0 left-0 right-0 border-t bg-white p-4 safe-area-inset-bottom">
         <div className="flex gap-2">
-          {contractType === '常用' && (
-            <Button variant="outline" className="flex-1" onClick={handleGoToSign} disabled={submitting}>
-              <Pen className="mr-2 h-4 w-4" />
-              {submitting ? '送信中...' : 'サインをもらう'}
-            </Button>
+          {isEditing ? (
+            <>
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => {
+                  setIsEditing(false)
+                  fetchData() // 元のデータに戻す
+                }}
+                disabled={submitting}
+              >
+                キャンセル
+              </Button>
+              <Button className="flex-1" onClick={handleSubmit} disabled={submitting}>
+                {submitting ? '更新中...' : '更新する'}
+              </Button>
+            </>
+          ) : (
+            <>
+              {contractType === '常用' && (
+                <Button variant="outline" className="flex-1" onClick={handleGoToSign} disabled={submitting}>
+                  <Pen className="mr-2 h-4 w-4" />
+                  {submitting ? '送信中...' : 'サインをもらう'}
+                </Button>
+              )}
+              <Button className="flex-1" onClick={handleSubmit} disabled={submitting}>
+                {submitting ? '送信中...' : '日報を提出'}
+              </Button>
+            </>
           )}
-          <Button className="flex-1" onClick={handleSubmit} disabled={submitting}>
-            {submitting ? '送信中...' : '日報を提出'}
-          </Button>
         </div>
       </div>
 

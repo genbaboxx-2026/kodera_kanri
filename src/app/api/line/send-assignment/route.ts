@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
-import { createAssignmentNotification } from '@/lib/line/flex-templates'
+import { createMultiSiteAssignmentNotification } from '@/lib/line/flex-templates'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 
@@ -113,17 +113,19 @@ export async function POST(request: NextRequest) {
     // 日付フォーマット
     const formattedDate = format(new Date(targetDate), 'M月d日(E)', { locale: ja })
 
-    const results: SendResult[] = []
-    let sentCount = 0
-    let noLineIdCount = 0
-    let errorCount = 0
+    // 作業員ごとにグループ化（同じ人が複数現場に配置されている場合をまとめる）
+    const workerAssignments = new Map<number, {
+      workerId: number
+      workerName: string
+      lineUserId: string | null
+      siteNames: string[]
+      assignmentWorkerIds: number[]
+    }>()
 
-    // 各配置の作業員にメッセージを送信
     for (const assignment of assignments) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const site = assignment.site as any
       const siteName = site?.name || '不明な現場'
-      const clientCompany = site?.client_company?.name || '不明'
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const workers = (assignment.workers || []) as any[]
@@ -132,43 +134,62 @@ export async function POST(request: NextRequest) {
         const worker = assignmentWorker?.worker
         if (!worker) continue
 
-        const result: SendResult = {
-          workerId: worker.id,
-          workerName: worker.name,
-          lineUserId: worker.line_user_id || null,
-          success: false,
-        }
-
-        if (!worker.line_user_id) {
-          result.error = 'LINE未連携'
-          noLineIdCount++
-          results.push(result)
-          continue
-        }
-
-        // Flexメッセージを作成
-        const message = createAssignmentNotification(formattedDate, {
-          siteName,
-          clientCompany,
-          contractType: assignment.contract_type as '常用' | '請負',
-          shiftType: assignment.shift_type as '日勤のみ' | '通し夜勤' | '夜勤のみ',
-          memo: assignment.memo || undefined,
-          assignmentWorkerId: assignmentWorker.id,
-        })
-
-        // 送信
-        const success = await sendLineMessage(worker.line_user_id, message)
-
-        if (success) {
-          result.success = true
-          sentCount++
+        const existing = workerAssignments.get(worker.id)
+        if (existing) {
+          existing.siteNames.push(siteName)
+          existing.assignmentWorkerIds.push(assignmentWorker.id)
         } else {
-          result.error = 'LINE送信失敗'
-          errorCount++
+          workerAssignments.set(worker.id, {
+            workerId: worker.id,
+            workerName: worker.name,
+            lineUserId: worker.line_user_id || null,
+            siteNames: [siteName],
+            assignmentWorkerIds: [assignmentWorker.id],
+          })
         }
-
-        results.push(result)
       }
+    }
+
+    const results: SendResult[] = []
+    let sentCount = 0
+    let noLineIdCount = 0
+    let errorCount = 0
+
+    // 各作業員にまとめてメッセージを送信
+    for (const workerData of workerAssignments.values()) {
+      const result: SendResult = {
+        workerId: workerData.workerId,
+        workerName: workerData.workerName,
+        lineUserId: workerData.lineUserId,
+        success: false,
+      }
+
+      if (!workerData.lineUserId) {
+        result.error = 'LINE未連携'
+        noLineIdCount++
+        results.push(result)
+        continue
+      }
+
+      // Flexメッセージを作成（複数現場をまとめて）
+      const message = createMultiSiteAssignmentNotification(
+        formattedDate,
+        workerData.siteNames,
+        workerData.assignmentWorkerIds
+      )
+
+      // 送信
+      const success = await sendLineMessage(workerData.lineUserId, message)
+
+      if (success) {
+        result.success = true
+        sentCount++
+      } else {
+        result.error = 'LINE送信失敗'
+        errorCount++
+      }
+
+      results.push(result)
     }
 
     // 配置のpublished_atを更新

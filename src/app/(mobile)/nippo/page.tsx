@@ -5,7 +5,7 @@ import { NippoMain } from '@/components/nippo/nippo-main'
 export default async function NippoPage({
   searchParams,
 }: {
-  searchParams: Promise<{ assignment_id?: string; date?: string }>
+  searchParams: Promise<{ site_id?: string; date?: string }>
 }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -22,7 +22,7 @@ export default async function NippoPage({
     .single()
 
   const params = await searchParams
-  const assignmentId = params.assignment_id ? parseInt(params.assignment_id) : undefined
+  const siteId = params.site_id ? parseInt(params.site_id) : undefined
   const date = params.date || new Date().toISOString().split('T')[0]
 
   return (
@@ -30,7 +30,7 @@ export default async function NippoPage({
       <NippoMain
         userId={user.id}
         workerId={profile?.worker_id || null}
-        initialAssignmentId={assignmentId}
+        initialSiteId={siteId}
         initialDate={date}
       />
     </main>
