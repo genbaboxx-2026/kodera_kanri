@@ -11,7 +11,9 @@ import { LocationSection } from './location-section'
 import { AddSiteModal } from './add-site-modal'
 import { WorkerSelectModal } from './worker-select-modal'
 import { PartnerSelectModal } from './partner-select-modal'
-import { Plus, Copy, Send, Crown, Check } from 'lucide-react'
+import { ConfirmationStatus } from './confirmation-status'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Plus, Copy, Send, Crown, Check, ClipboardList } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -48,6 +50,7 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [initialLoadDone, setInitialLoadDone] = useState(false)
+  const [activeTab, setActiveTab] = useState<'haichi' | 'confirmation'>('haichi')
 
   // マスターデータ
   const [workers, setWorkers] = useState<Worker[]>([])
@@ -569,78 +572,106 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
         onNextDay={handleNextDay}
       />
 
-      {unassignedCount > 0 && (
-        <UnassignedAlert workers={unassignedWorkers} />
-      )}
+      {/* タブ */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'haichi' | 'confirmation')} className="w-full">
+        <TabsList className="w-full justify-start rounded-none border-b bg-white px-4">
+          <TabsTrigger value="haichi" className="flex items-center gap-1.5">
+            <ClipboardList className="h-4 w-4" />
+            配置入力
+          </TabsTrigger>
+          <TabsTrigger value="confirmation" className="flex items-center gap-1.5">
+            <Check className="h-4 w-4" />
+            確認状況
+            {isPublished && unconfirmedCount > 0 && (
+              <span className="ml-1 rounded-full bg-orange-500 px-1.5 py-0.5 text-xs text-white">
+                {unconfirmedCount}
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-      <div className="space-y-4 p-4">
-        {/* 現場カード */}
-        {assignments.map((assignment) => (
-          <SiteCard
-            key={assignment.id}
-            assignmentId={assignment.id}
-            siteName={assignment.site?.name || '不明'}
-            clientCompany={assignment.site?.client_company?.name || ''}
-            contractType={assignment.contract_type}
-            shiftType={assignment.shift_type}
-            workers={assignment.workers?.map(w => ({
-              id: w.id,
-              workerId: w.worker_id,
-              name: w.worker?.name || '',
-              shift: w.shift,
-              isForeman: (w as Tables<'assignment_workers'> & { is_foreman?: boolean }).is_foreman || false,
-            })) || []}
-            partners={assignment.partners?.map(p => ({
-              id: p.id,
-              partnerCompanyId: p.partner_company_id,
-              name: p.partner_company?.name || '',
-              headcount: p.headcount,
-            })) || []}
-            isReadOnly={isPastDate}
-            onAddWorker={() => setWorkerModalState({
-              open: true,
-              assignmentId: assignment.id,
-              siteId: assignment.site_id,
-            })}
-            onRemoveWorker={handleRemoveWorkerFromAssignment}
-            onUpdatePartnerCount={handleUpdatePartnerCount}
-            onAddPartner={() => setPartnerModalState({
-              open: true,
-              assignmentId: assignment.id,
-            })}
-            onDelete={() => handleDeleteAssignment(assignment.id)}
-            onChangeForeman={() => setForemanModalState({
-              open: true,
-              assignmentId: assignment.id,
-            })}
+        <TabsContent value="haichi" className="mt-0">
+          {unassignedCount > 0 && (
+            <UnassignedAlert workers={unassignedWorkers} />
+          )}
+
+          <div className="space-y-4 p-4">
+            {/* 現場カード */}
+            {assignments.map((assignment) => (
+              <SiteCard
+                key={assignment.id}
+                assignmentId={assignment.id}
+                siteName={assignment.site?.name || '不明'}
+                clientCompany={assignment.site?.client_company?.name || ''}
+                contractType={assignment.contract_type}
+                shiftType={assignment.shift_type}
+                workers={assignment.workers?.map(w => ({
+                  id: w.id,
+                  workerId: w.worker_id,
+                  name: w.worker?.name || '',
+                  shift: w.shift,
+                  isForeman: (w as Tables<'assignment_workers'> & { is_foreman?: boolean }).is_foreman || false,
+                })) || []}
+                partners={assignment.partners?.map(p => ({
+                  id: p.id,
+                  partnerCompanyId: p.partner_company_id,
+                  name: p.partner_company?.name || '',
+                  headcount: p.headcount,
+                })) || []}
+                isReadOnly={isPastDate}
+                onAddWorker={() => setWorkerModalState({
+                  open: true,
+                  assignmentId: assignment.id,
+                  siteId: assignment.site_id,
+                })}
+                onRemoveWorker={handleRemoveWorkerFromAssignment}
+                onUpdatePartnerCount={handleUpdatePartnerCount}
+                onAddPartner={() => setPartnerModalState({
+                  open: true,
+                  assignmentId: assignment.id,
+                })}
+                onDelete={() => handleDeleteAssignment(assignment.id)}
+                onChangeForeman={() => setForemanModalState({
+                  open: true,
+                  assignmentId: assignment.id,
+                })}
+              />
+            ))}
+
+            {/* 現場追加ボタン - 場所・その他の上に配置 */}
+            {!isPastDate && (
+              <button
+                onClick={() => setIsAddSiteModalOpen(true)}
+                className="w-full rounded-lg border-2 border-dashed border-gray-300 p-4 text-center text-gray-500 hover:border-gray-400 hover:text-gray-600"
+              >
+                <Plus className="mx-auto h-6 w-6" />
+                <span className="text-sm">現場を追加</span>
+              </button>
+            )}
+
+            {/* 場所カテゴリ */}
+            <LocationSection
+              locationTypes={locationTypes}
+              assignmentLocations={assignmentLocations}
+              workers={workers}
+              assignedWorkerIds={assignedWorkerIds}
+              isReadOnly={isPastDate}
+              onAddWorker={handleAddWorkerToLocation}
+              onRemoveWorker={handleRemoveWorkerFromLocation}
+            />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="confirmation" className="mt-0">
+          <ConfirmationStatus
+            assignments={assignments}
+            isPublished={isPublished}
           />
-        ))}
-
-        {/* 現場追加ボタン - 場所・その他の上に配置 */}
-        {!isPastDate && (
-          <button
-            onClick={() => setIsAddSiteModalOpen(true)}
-            className="w-full rounded-lg border-2 border-dashed border-gray-300 p-4 text-center text-gray-500 hover:border-gray-400 hover:text-gray-600"
-          >
-            <Plus className="mx-auto h-6 w-6" />
-            <span className="text-sm">現場を追加</span>
-          </button>
-        )}
-
-        {/* 場所カテゴリ */}
-        <LocationSection
-          locationTypes={locationTypes}
-          assignmentLocations={assignmentLocations}
-          workers={workers}
-          assignedWorkerIds={assignedWorkerIds}
-          isReadOnly={isPastDate}
-          onAddWorker={handleAddWorkerToLocation}
-          onRemoveWorker={handleRemoveWorkerFromLocation}
-        />
-      </div>
+        </TabsContent>
+      </Tabs>
 
       {/* フッター */}
-      {!isPastDate && (
+      {!isPastDate && activeTab === 'haichi' && (
         <div className="fixed bottom-0 left-0 right-0 border-t bg-white p-4 safe-area-inset-bottom">
           <div className="flex gap-2">
             <Button
