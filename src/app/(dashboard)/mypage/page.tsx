@@ -15,6 +15,20 @@ interface Profile {
   email: string
   role: '管理者' | '現場スタッフ'
   display_name: string | null
+  phone: string | null
+  line_user_id: string | null
+}
+
+// 電話番号フォーマット
+function formatPhone(phone: string | null): string {
+  if (!phone) return '-'
+  const digits = phone.replace(/\D/g, '')
+  if (digits.length === 11) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`
+  } else if (digits.length === 10) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
+  }
+  return phone
 }
 
 export default function MyPage() {
@@ -38,16 +52,20 @@ export default function MyPage() {
 
     const { data: profileData } = await supabase
       .from('profiles')
-      .select('*')
+      .select('*, worker:workers(phone, line_user_id)')
       .eq('id', user.id)
       .single()
 
     if (profileData) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const worker = profileData.worker as any
       setProfile({
         id: profileData.id,
         email: user.email || '',
         role: profileData.role,
         display_name: profileData.display_name,
+        phone: worker?.phone || null,
+        line_user_id: worker?.line_user_id || null,
       })
     }
 
@@ -160,6 +178,18 @@ export default function MyPage() {
           <div>
             <p className="text-sm text-gray-500">メールアドレス</p>
             <p className="font-medium">{profile?.email || '-'}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-500">電話番号</p>
+            <p className="font-medium">{formatPhone(profile?.phone ?? null)}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-500">LINE連携</p>
+            {profile?.line_user_id ? (
+              <Badge variant="default" className="bg-green-500">連携済み</Badge>
+            ) : (
+              <Badge variant="secondary">未連携</Badge>
+            )}
           </div>
           <div>
             <p className="text-sm text-gray-500">ロール</p>
