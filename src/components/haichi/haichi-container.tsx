@@ -5,7 +5,6 @@ import { format, addDays, subDays, isBefore, startOfDay } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { DateNav } from './date-nav'
-import { SummaryBar } from './summary-bar'
 import { UnassignedAlert } from './unassigned-alert'
 import { SiteCard } from './site-card'
 import { LocationSection } from './location-section'
@@ -568,14 +567,6 @@ export function HaichiContainer({ userId }: HaichiContainerProps) {
         date={selectedDate}
         onPrevDay={handlePrevDay}
         onNextDay={handleNextDay}
-      />
-
-      <SummaryBar
-        assignedCount={assignedCount}
-        unassignedCount={unassignedCount}
-        confirmedCount={confirmedCount}
-        unconfirmedCount={unconfirmedCount}
-        isPublished={isPublished}
       />
 
       {unassignedCount > 0 && (
