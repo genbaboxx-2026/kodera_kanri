@@ -58,9 +58,16 @@ export function NippoMain({ userId, workerId, initialAssignmentId, initialDate }
 
   // 現場一覧を表示
   return (
-    <NippoSiteList
-      workerId={workerId}
-      onSelectSite={(assignmentId) => setSelectedAssignmentId(assignmentId)}
-    />
+    <div className="flex flex-col">
+      {/* ヘッダー */}
+      <div className="sticky top-0 z-10 flex items-center justify-center border-b bg-white px-4 h-14">
+        <h1 className="text-lg font-bold">日報</h1>
+      </div>
+
+      <NippoSiteList
+        workerId={workerId}
+        onSelectSite={(assignmentId) => setSelectedAssignmentId(assignmentId)}
+      />
+    </div>
   )
 }

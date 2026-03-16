@@ -8,13 +8,26 @@ import { ChevronLeft } from 'lucide-react'
 const pageTitles: Record<string, string> = {
   '/': 'ホーム',
   '/haichi': '配置入力',
-  '/nippo': '日報入力',
+  '/nippo': '日報',
   '/sign': '手書きサイン',
 }
 
+// 戻るボタンを非表示にするパス
+const hideBackButtonPaths = ['/']
+
+// ヘッダー自体を非表示にするパス（独自ヘッダーを持つページ）
+const hideHeaderPaths = ['/nippo']
+
 export function MobileHeader() {
   const pathname = usePathname()
+
+  // nippoは独自にヘッダーを管理するため非表示
+  if (hideHeaderPaths.includes(pathname)) {
+    return null
+  }
+
   const title = pageTitles[pathname] || '小寺工務店'
+  const hideBackButton = hideBackButtonPaths.includes(pathname)
 
   return (
     <header className="sticky top-0 z-50 border-b bg-white">
@@ -23,7 +36,7 @@ export function MobileHeader() {
           href="/"
           className={cn(
             'flex items-center text-gray-600 hover:text-gray-900',
-            pathname === '/' && 'invisible'
+            hideBackButton && 'invisible'
           )}
         >
           <ChevronLeft className="h-5 w-5" />
