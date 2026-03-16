@@ -353,6 +353,58 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     if (workersRes.data) setAllWorkers(workersRes.data)
     if (partnersRes.data) setAllPartners(partnersRes.data)
 
+    // assignmentIdが指定されている場合はその配置を使う
+    if (assignmentId) {
+      const { data: assignmentData } = await supabase
+        .from('assignments')
+        .select(`
+          *,
+          site:sites(*, client_company:companies!sites_client_company_id_fkey(*), payer_company:companies!sites_payer_company_id_fkey(*)),
+          workers:assignment_workers(*, worker:workers(*)),
+          partners:assignment_partners(*, partner_company:partner_companies(*))
+        `)
+        .eq('id', assignmentId)
+        .single()
+
+      if (assignmentData) {
+        // この配置の既存日報を検索
+        const { data: existingReportData } = await supabase
+          .from('daily_reports')
+          .select(`
+            *,
+            site:sites(*, client_company:companies!sites_client_company_id_fkey(*), payer_company:companies!sites_payer_company_id_fkey(*)),
+            report_workers:report_workers(*, worker:workers(*)),
+            report_partners:report_partners(*, partner_company:partner_companies(*))
+          `)
+          .eq('report_date', assignmentData.target_date)
+          .eq('site_id', assignmentData.site_id)
+          .eq('reporter_id', workerId || 0)
+          .limit(1)
+          .maybeSingle()
+
+        if (existingReportData) {
+          // サインの有無を確認
+          const { data: signatureData } = await supabase
+            .from('signatures')
+            .select('id')
+            .eq('daily_report_id', existingReportData.id)
+            .limit(1)
+            .maybeSingle()
+
+          setHasSigned(!!signatureData)
+          setAssignment(assignmentData as Assignment)
+          applyExistingReport(existingReportData as DailyReport, assignmentData.shift_type)
+        } else {
+          // 新規日報 - 配置データをプリセット
+          applyAssignmentPreset(assignmentData as Assignment)
+        }
+      }
+
+      setLoading(false)
+      return
+    }
+
+    // assignmentIdがない場合は従来のロジック（互換性のため）
     // まず既存の日報を検索（職長の日報）
     if (workerId) {
       const { data: existingReportData } = await supabase
@@ -438,7 +490,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     }
 
     setLoading(false)
-  }, [supabase, workerId, currentDate])
+  }, [supabase, workerId, currentDate, assignmentId])
 
   useEffect(() => {
     fetchData()
@@ -665,10 +717,13 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
     }
   }
 
+  // assignmentIdがある場合は日付ナビを非表示
+  const showDateNav = !assignmentId
+
   if (loading) {
     return (
       <div className="flex flex-col">
-        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
+        {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
         <div className="p-4 text-center text-gray-500">読み込み中...</div>
       </div>
     )
@@ -678,7 +733,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
   if (isFutureDate) {
     return (
       <div className="flex flex-col">
-        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
+        {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
         <div className="flex flex-col items-center justify-center p-8 text-center">
           <AlertCircle className="h-12 w-12 text-gray-400 mb-4" />
           <p className="text-gray-500 text-lg">まだ作業が行われていません</p>
@@ -692,7 +747,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
   if (isSubmitted) {
     return (
       <div className="flex flex-col">
-        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
+        {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
 
         {/* 報告済みバッジ - 目立つように表示 */}
         <div className="bg-green-100 border-b-2 border-green-300 px-4 py-4">
@@ -861,7 +916,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
   if (!assignment) {
     return (
       <div className="flex flex-col">
-        <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
+        {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
         <div className="flex flex-col items-center justify-center p-8 text-center">
           <AlertCircle className="h-12 w-12 text-gray-400 mb-4" />
           <p className="text-gray-500 text-lg">この日の配置データがありません</p>
@@ -879,7 +934,7 @@ export function NippoContainer({ userId, workerId, assignmentId, targetDate }: N
   return (
     <div className="flex flex-col">
       {/* 日付ナビゲーション */}
-      <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
+      {showDateNav && <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />}
 
       <div className="space-y-4 p-4 pb-24">
         {/* 現場情報 */}

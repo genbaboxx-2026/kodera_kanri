@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { NippoContainer } from '@/components/nippo/nippo-container'
+import { NippoMain } from '@/components/nippo/nippo-main'
 
 export default async function NippoPage({
   searchParams,
@@ -27,11 +27,11 @@ export default async function NippoPage({
 
   return (
     <main className="min-h-screen bg-gray-50">
-      <NippoContainer
+      <NippoMain
         userId={user.id}
         workerId={profile?.worker_id || null}
-        assignmentId={assignmentId}
-        targetDate={date}
+        initialAssignmentId={assignmentId}
+        initialDate={date}
       />
     </main>
   )
