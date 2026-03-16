@@ -244,34 +244,9 @@ export function NippoSiteList({ workerId, onSelectSite }: NippoSiteListProps) {
     )
   }
 
-  // ステータス別のカウント
-  const counts = {
-    pending: siteAssignments.filter(s => s.reportStatus === '未報告').length,
-    reported: siteAssignments.filter(s => s.reportStatus === '報告済み').length,
-    completed: siteAssignments.filter(s => s.reportStatus === '完了').length,
-  }
-
   return (
     <div className="flex flex-col pb-4">
       <DateNav date={currentDate} onPrevDay={handlePrevDay} onNextDay={handleNextDay} />
-
-      {/* サマリー */}
-      <div className="flex items-center justify-center gap-4 bg-white border-b px-4 py-3">
-        <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-yellow-600 font-medium">{counts.pending}</span>
-          <span className="text-gray-500">未報告</span>
-        </div>
-        <div className="h-4 w-px bg-gray-200" />
-        <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-blue-600 font-medium">{counts.reported}</span>
-          <span className="text-gray-500">報告済み</span>
-        </div>
-        <div className="h-4 w-px bg-gray-200" />
-        <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-green-600 font-medium">{counts.completed}</span>
-          <span className="text-gray-500">完了</span>
-        </div>
-      </div>
 
       {/* 現場リスト */}
       <div className="space-y-3 p-4">
